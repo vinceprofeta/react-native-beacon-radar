@@ -65,6 +65,7 @@ public class BeaconRadarModule extends ReactContextBaseJavaModule implements Per
     this.reactContext = reactContext;
     beaconManager = BeaconManager.getInstanceForApplication(reactContext);
     beaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24"));
+    beaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout("m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24"));
     region = new Region("RNIbeaconScannerRegion", null, null, null);
 
     instance = this;
