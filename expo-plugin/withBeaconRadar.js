@@ -1,4 +1,4 @@
-const { withAndroidManifest, withInfoPlist } = require('@expo/config-plugins');
+const { withAndroidManifest, withInfoPlist } = require("@expo/config-plugins")
 
 const withBeaconRadar = (config) => {
   // Android configurations
@@ -15,40 +15,40 @@ const withBeaconRadar = (config) => {
       "android.permission.BLUETOOTH_SCAN",
       "android.permission.BLUETOOTH_CONNECT",
     ];*/
-    return conf;
-  });
+    return conf
+  })
 
   // iOS configurations
   config = withInfoPlist(config, (conf) => {
     conf.modResults.NSLocationAlwaysAndWhenInUseUsageDescription =
-      'We use your location to find nearby beacons even when the app is not running';
+      "We use your location to find nearby beacons even when the app is not running"
     conf.modResults.NSLocationWhenInUseUsageDescription =
-      "We use your location to find nearby beacons while you're using the app";
+      "We use your location to find nearby beacons while you're using the app"
     conf.modResults.NSBluetoothAlwaysUsageDescription =
-      'We use Bluetooth to scan for nearby beacons';
+      "We use Bluetooth to scan for nearby beacons"
     conf.modResults.NSBluetoothPeripheralUsageDescription =
-      'We use Bluetooth to connect to nearby devices';
+      "We use Bluetooth to connect to nearby devices"
 
     // Ensure UIBackgroundModes is an array
     if (!Array.isArray(conf.modResults.UIBackgroundModes)) {
-      conf.modResults.UIBackgroundModes = [];
+      conf.modResults.UIBackgroundModes = []
     }
 
     // Add necessary keys to UIBackgroundModes
-    if (!conf.modResults.UIBackgroundModes.includes('location')) {
-      conf.modResults.UIBackgroundModes.push('location');
+    if (!conf.modResults.UIBackgroundModes.includes("location")) {
+      conf.modResults.UIBackgroundModes.push("location")
     }
-    if (!conf.modResults.UIBackgroundModes.includes('bluetooth-central')) {
-      conf.modResults.UIBackgroundModes.push('bluetooth-central');
+    if (!conf.modResults.UIBackgroundModes.includes("bluetooth-central")) {
+      conf.modResults.UIBackgroundModes.push("bluetooth-central")
     }
-    if (!conf.modResults.UIBackgroundModes.includes('bluetooth-peripheral')) {
-      conf.modResults.UIBackgroundModes.push('bluetooth-peripheral');
+    if (!conf.modResults.UIBackgroundModes.includes("bluetooth-peripheral")) {
+      conf.modResults.UIBackgroundModes.push("bluetooth-peripheral")
     }
 
-    return conf;
-  });
+    return conf
+  })
 
-  return config;
-};
+  return config
+}
 
-module.exports = withBeaconRadar;
+module.exports = withBeaconRadar

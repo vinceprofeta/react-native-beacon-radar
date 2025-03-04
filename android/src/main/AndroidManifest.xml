@@ -7,13 +7,18 @@
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
   <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
 
   <application>
     <service
-      android:name=".BeaconRadarForegroundService"
+      android:name="org.altbeacon.beacon.service.BeaconService"
       android:enabled="true"
-      android:exported="true"
-      android:stopWithTask="false"
-      android:foregroundServiceType="location"/>
+      android:exported="false"
+      android:foregroundServiceType="location"
+      android:isolatedProcess="false"
+      android:label="beacon" />
+
+
   </application>
 </manifest>
