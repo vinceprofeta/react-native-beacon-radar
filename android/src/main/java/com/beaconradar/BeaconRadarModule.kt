@@ -355,16 +355,17 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     private fun sendBeaconNotification(beacon: Beacon) {
         Log.d(TAG, "Sending beacon notification for: ${beacon.id1}")
 
-        val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // Ensure notification channel exists first
+        createNotificationChannel()
 
+        val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        launchApp()
         // Create content for the notification
         val distanceText = when {
             beacon.distance < 1.0 -> "Very close (${String.format("%.2f", beacon.distance)}m)"
             beacon.distance < 3.0 -> "Near (${String.format("%.2f", beacon.distance)}m)"
             else -> "Far (${String.format("%.2f", beacon.distance)}m)"
         }
-
-        launchApp()
 
         val content = "Beacon detected: ${beacon.id1}\nDistance: $distanceText\nRSSI: ${beacon.rssi}"
 
@@ -406,7 +407,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             .setFullScreenIntent(fullScreenIntent, true) // Add full screen intent
             .setAutoCancel(true)
             .setVibrate(longArrayOf(0, 500, 250, 500))
-            .setSound(null) // Vibration pattern
+            // .setSound(null) // Vibration pattern
 
             // .setLights(0xFF0000FF.toInt(), 300, 1000) // Blue LED flash
             // .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
@@ -424,16 +425,25 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         try {
             Log.d(TAG, "Attempting to launch app")
 
-            // Create intent for MainActivity
-            val packageName = reactContext.applicationContext.packageName;
+            // Get the package name from application context
+            val packageName = reactContext.applicationContext.packageName
             Log.d(TAG, "Package name: $packageName")
-            val intent = Intent(reactContext, Class.forName(packageName))
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            intent.putExtra("launched_from_beacon", true)
 
-            // Launch the app
-            reactContext.startActivity(intent)
-            Log.d(TAG, "App launch intent executed")
+            // Get launch intent using the package name
+            val intent = reactContext.packageManager.getLaunchIntentForPackage(packageName)
+
+            if (intent != null) {
+                // Add necessary flags
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                               Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                intent.putExtra("launched_from_beacon", true)
+
+                // Launch the app
+                reactContext.startActivity(intent)
+                Log.d(TAG, "App launch intent executed successfully")
+            } else {
+                Log.e(TAG, "Could not get launch intent for package: $packageName")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error launching app: ${e.message}", e)
         }
