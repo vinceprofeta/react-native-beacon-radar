@@ -425,7 +425,8 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             Log.d(TAG, "Attempting to launch app")
 
             // Create intent for MainActivity
-            val packageName = reactContext.applicationContext.packageName
+            val packageName = reactContext.applicationContext.packageName;
+            Log.d(TAG, "Package name: $packageName")
             val intent = Intent(reactContext, Class.forName(packageName))
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
             intent.putExtra("launched_from_beacon", true)
