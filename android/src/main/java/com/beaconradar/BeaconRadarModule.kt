@@ -25,6 +25,9 @@ import com.facebook.react.modules.core.PermissionAwareActivity
 import com.facebook.react.modules.core.PermissionListener
 import org.altbeacon.beacon.*
 import java.util.*
+import android.content.ActivityNotFoundException
+import android.net.Uri
+import android.provider.Settings
 
 
 
@@ -48,27 +51,50 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         private const val FOREGROUND_NOTIFICATION_NAME = "Beacon Scanner Service"
         private const val FOREGROUND_NOTIFICATION_DESCRIPTION = "Required for background beacon scanning"
         private const val FOREGROUND_NOTIFICATION_ID = 456
+        private const val PREFS_NAME = "BeaconRadarPrefs"
+        private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
+        private var MAX_DISTANCE = 4.0
         @JvmStatic
         var instance: BeaconRadarModule? = null
+
+        // Add a timestamp to track when we last launched the app
+        private var lastAppLaunchTime: Long = 0
+        // Minimum time between app launches (5 seconds)
+        private const val MIN_LAUNCH_INTERVAL = 5000L
     }
 
     private val beaconManager: BeaconManager = BeaconManager.getInstanceForApplication(reactContext)
-    private var region: Region = Region("all-beacons", null, null, null)
+    private var region: Region = Region("all-beacons", Identifier.parse("FDA50693-A4E2-4FB1-AFCF-C6EB07647825"), null, null)
 
     init {
         instance = this
         setupBeaconManager()
+        // Load background mode setting from SharedPreferences
+        val backgroundMode = loadBackgroundModeSetting()
+        setBackgroundMode(backgroundMode)
+    }
 
-        // Enable background mode by default
-        Log.d(TAG, "Enabling background beacon scanning by default")
+    // Load background mode setting from SharedPreferences
+    private fun loadBackgroundModeSetting(): Boolean {
+        val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        // Default to true if setting doesn't exist
+        return sharedPrefs.getBoolean(BACKGROUND_MODE_KEY, false)
+    }
+
+
+
+    private fun setBackgroundMode(enable: Boolean) {
+        Log.d(TAG, "Setting background beacon scanning to: $enable")
         try {
+            val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            sharedPrefs.edit().putBoolean(BACKGROUND_MODE_KEY, enable).apply()
             // Setup background scanning parameters
-            beaconManager.setEnableScheduledScanJobs(true)
-            beaconManager.setBackgroundMode(true)
+            beaconManager.setEnableScheduledScanJobs(enable)
+            beaconManager.setBackgroundMode(enable)
             beaconManager.backgroundScanPeriod = 1100L
             beaconManager.backgroundBetweenScanPeriod = 0L
         } catch (e: Exception) {
-            Log.e(TAG, "Error enabling default background mode: ${e.message}")
+            Log.e(TAG, "Error setting background mode: ${e.message}")
         }
     }
 
@@ -178,8 +204,9 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     override fun didExitRegion(region: Region) {
         Log.d(TAG, "didExitRegion: Stopping ranging beacons for region: $region")
-        beaconManager.stopRangingBeacons(region)
         reactContext.runOnUiQueueThread {
+            beaconManager.stopRangingBeacons(region)
+
             val params = Arguments.createMap().apply {
                 putString("identifier", region.uniqueId)
                 putString("uuid", region.id1?.toString())
@@ -220,6 +247,17 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                 // Find the nearest beacon
                 val nearestBeacon = recentBeacons.minByOrNull { it.distance }
 
+                val nearestBeaconCalculatedDistance = if (nearestBeacon != null && nearestBeacon.distance < 0 && nearestBeacon.rssi != 0) {
+                    calculateDistance(nearestBeacon.txPower, nearestBeacon.rssi)
+                } else {
+                    nearestBeacon?.distance ?: Double.MAX_VALUE
+                }
+
+                if(nearestBeaconCalculatedDistance > MAX_DISTANCE) {
+                    Log.d(TAG, "Nearest beacon is too far away, max distance is: $MAX_DISTANCE, beacon distance is: ${nearestBeaconCalculatedDistance}")
+                    return
+                }
+
                 // Send notification for the nearest beacon if app is in background
                 val isInForeground = reactContext.currentActivity?.hasWindowFocus() == true
                 if (!isInForeground && nearestBeacon != null) {
@@ -231,11 +269,21 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                 reactContext.runOnUiQueueThread {
                     val beaconArray = Arguments.createArray()
                     recentBeacons.forEach { beacon ->
+                        // Calculate distance if it's negative
+                        val calculatedDistance = if (beacon.distance < 0 && beacon.rssi != 0) {
+                            calculateDistance(beacon.txPower, beacon.rssi)
+                        } else {
+                            beacon.distance
+                        }
+
+                        Log.d(TAG, "Beacon ${beacon.id1}: Raw distance=${beacon.distance}, " +
+                              "Calculated=${calculatedDistance}, RSSI=${beacon.rssi}, TxPower=${beacon.txPower}")
+
                         val beaconMap = Arguments.createMap().apply {
                             putString("uuid", beacon.id1?.toString() ?: "")
                             putString("major", beacon.id2?.toString() ?: "")
                             putString("minor", beacon.id3?.toString() ?: "")
-                            putDouble("distance", beacon.distance)
+                            putDouble("distance", calculatedDistance)
                             putInt("rssi", beacon.rssi)
                             putInt("txPower", beacon.txPower)
                             putString("bluetoothName", beacon.bluetoothName ?: "")
@@ -244,6 +292,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                             putDouble("timestamp", beacon.lastCycleDetectionTimestamp.toDouble())
                         }
                         beaconArray.pushMap(beaconMap)
+                        Log.d(TAG, "didRangeBeaconsInRegion: Beacon detected: ${beacon.id1}")
                     }
                     reactContext
                         .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
@@ -259,9 +308,20 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun startScanning(uuid: String?, config: ReadableMap?, promise: Promise) {
-        region = Region("all-beacons", null, null, null)
+        region = Region("all-beacons", Identifier.parse(uuid), null, null)
         setupBeaconScanning()
         promise.resolve(null)
+    }
+
+    @ReactMethod
+    fun setMaxDistance(distance: Double, promise: Promise) {
+        MAX_DISTANCE = distance
+        promise.resolve(distance)
+    }
+
+    @ReactMethod
+    fun getMaxDistance(promise: Promise) {
+        promise.resolve(MAX_DISTANCE)
     }
 
     @ReactMethod
@@ -291,7 +351,9 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopScanning(promise: Promise) {
-        // Implementation here
+        reactContext.runOnUiQueueThread {
+            beaconManager.stopRangingBeacons(region)
+        }
     }
 
     fun runScanForAllBeacons(promise: Promise) {
@@ -310,23 +372,18 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun enableBackgroundMode(enable: Boolean, promise: Promise) {
         try {
-            Log.d(TAG, "Setting background mode to: $enable")
-            if (enable) {
-                // Setup background scanning
-                beaconManager.setEnableScheduledScanJobs(true)
-                beaconManager.setBackgroundMode(true)
-                beaconManager.backgroundScanPeriod = 1100L
-                beaconManager.backgroundBetweenScanPeriod = 0L
-            } else {
-                // Disable background scanning
-                beaconManager.setEnableScheduledScanJobs(false)
-                beaconManager.setBackgroundMode(false)
-            }
+            setBackgroundMode(enable)
             promise.resolve(true)
         } catch (e: Exception) {
             Log.e(TAG, "Error toggling background mode: ${e.message}")
             promise.reject("BACKGROUND_MODE_ERROR", "Failed to set background mode: ${e.message}")
         }
+    }
+
+    @ReactMethod
+    fun getBackgroundMode(promise: Promise) {
+        // Return the actual setting from SharedPreferences to ensure consistency
+        promise.resolve(loadBackgroundModeSetting())
     }
 
     private fun createNotificationChannel() {
@@ -359,13 +416,33 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         createNotificationChannel()
 
         val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        launchApp()
+
+
         // Create content for the notification
         val distanceText = when {
             beacon.distance < 1.0 -> "Very close (${String.format("%.2f", beacon.distance)}m)"
-            beacon.distance < 3.0 -> "Near (${String.format("%.2f", beacon.distance)}m)"
+            beacon.distance < 4.0 -> "Near (${String.format("%.2f", beacon.distance)}m)"
             else -> "Far (${String.format("%.2f", beacon.distance)}m)"
         }
+
+        val tooFar = beacon.distance > MAX_DISTANCE
+        Log.d(TAG, "Beacon ${beacon.id1} distance: ${beacon.distance}, max distance: $MAX_DISTANCE, tooFar: $tooFar")
+        if(tooFar) {
+            Log.d(TAG, "Beacon ${beacon.id1} is too far away, max distance is: $MAX_DISTANCE, beacon distance is: ${beacon.distance}")
+            return
+        }
+
+
+        // Only try to launch the app if enough time has passed since the last attempt
+        // val currentTime = System.currentTimeMillis()
+        // if (currentTime - lastAppLaunchTime > MIN_LAUNCH_INTERVAL) {
+        //     Log.d(TAG, "Attempting to launch app (last launch was ${(currentTime - lastAppLaunchTime)/1000} seconds ago)")
+        //     launchApp()
+        //     lastAppLaunchTime = currentTime
+        // } else {
+        //     Log.d(TAG, "Skipping app launch - last launch was only ${(currentTime - lastAppLaunchTime)/1000} seconds ago")
+        // }
+        launchApp()
 
         val content = "Beacon detected: ${beacon.id1}\nDistance: $distanceText\nRSSI: ${beacon.rssi}"
 
@@ -407,10 +484,8 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             .setFullScreenIntent(fullScreenIntent, true) // Add full screen intent
             .setAutoCancel(true)
             .setVibrate(longArrayOf(0, 500, 250, 500))
-            // .setSound(null) // Vibration pattern
+            .setSound(null) // Vibration pattern
 
-            // .setLights(0xFF0000FF.toInt(), 300, 1000) // Blue LED flash
-            // .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
 
         // Use a unique ID based on timestamp to avoid overwriting notifications
         val notificationId = System.currentTimeMillis().toInt()
@@ -421,33 +496,34 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
      // Add a method to launch the app
 
-    private fun launchApp() {
+   fun launchApp() {
+        val targetPackage = reactContext.packageName;
+
         try {
-            Log.d(TAG, "Attempting to launch app")
+            // Check if we have the permission
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (!Settings.canDrawOverlays(reactContext)) {
+                    Log.e(TAG, "SYSTEM_ALERT_WINDOW permission not granted")
+                    return
+                }
+            }
 
-            // Get the package name from application context
-            val packageName = reactContext.applicationContext.packageName
-            Log.d(TAG, "Package name: $packageName")
+            val launchIntent = reactContext.packageManager.getLaunchIntentForPackage(targetPackage)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                putExtra("launched_from_external", true)
+            }
 
-            // Get launch intent using the package name
-            val intent = reactContext.packageManager.getLaunchIntentForPackage(packageName)
-
-            if (intent != null) {
-                // Add necessary flags
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                               Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                intent.putExtra("launched_from_beacon", true)
-
-                // Launch the app
-                reactContext.startActivity(intent)
+            if (launchIntent != null) {
+                reactContext.startActivity(launchIntent)
                 Log.d(TAG, "App launch intent executed successfully")
-            } else {
-                Log.e(TAG, "Could not get launch intent for package: $packageName")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error launching app: ${e.message}", e)
         }
     }
+
 
     // Boot receiver class for restarting beacon scanning after device reboot
     inner class BootCompletedReceiver : BroadcastReceiver() {
@@ -457,6 +533,17 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                 setupBeaconScanning()
             }
         }
+    }
+
+    // Add this helper function to calculate distance from RSSI
+    private fun calculateDistance(txPower: Int, rssi: Int): Double {
+        if (rssi == 0) {
+            return -1.0 // Can't determine distance without RSSI
+        }
+
+        // Standard formula for estimating distance from RSSI and txPower
+        // This is the same formula used by the AltBeacon library internally
+        return Math.pow(10.0, (txPower - rssi) / 20.0)
     }
 
 }
