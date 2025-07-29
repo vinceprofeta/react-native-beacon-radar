@@ -62,6 +62,26 @@ export function startRadar(config: any) {
   }
 }
 
+// ANDROID ONLY
 export function initializeBluetoothManager() {
-  return BeaconRadar.initializeBluetoothManager()
+  return BeaconRadar.initializeBluetoothManager?.()
+}
+export function enableBackgroundMode(enable: boolean): Promise<boolean> {
+  return BeaconRadar.enableBackgroundMode(enable)
+}
+
+export function getBackgroundMode(): Promise<boolean> {
+  return BeaconRadar.getBackgroundMode?.()
+}
+
+export function setMaxDistance(distance: number): Promise<boolean> {
+  return BeaconRadar.setMaxDistance?.(distance)
+}
+
+export function getMaxDistance(): Promise<number> {
+  return BeaconRadar.getMaxDistance?.()
+}
+
+export function canDrawOverlays(): Promise<boolean> {
+  return BeaconRadar.canDrawOverlays?.()
 }

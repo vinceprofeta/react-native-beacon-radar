@@ -386,6 +386,11 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(loadBackgroundModeSetting())
     }
 
+     @ReactMethod
+    fun canDrawOverlays(promise: Promise) {
+        promise.resolve(Settings.canDrawOverlays(reactContext))
+    }
+
     private fun createNotificationChannel() {
         // Create the notification channel (required for Android 8.0+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -545,5 +550,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         // This is the same formula used by the AltBeacon library internally
         return Math.pow(10.0, (txPower - rssi) / 20.0)
     }
+
+
 
 }
