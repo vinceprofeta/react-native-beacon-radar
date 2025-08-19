@@ -4,7 +4,7 @@ import React
 
 @objc(BeaconRadar)
 class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentralManagerDelegate {
-  
+
   static func moduleName() -> String {
     return "BeaconRadar"
   }
@@ -16,20 +16,20 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
 
     @objc func startScanning(_ uuid: String, config: NSDictionary) {
       if #available(iOS 13.0, *) {
-          
+
           DispatchQueue.main.async {
             self.locationManager = CLLocationManager()
             self.locationManager.delegate = self
             self.locationManager.requestAlwaysAuthorization()
-            
-              
+
+
             if let useBackgroundScanning = config["useBackgroundScanning"] as? Bool, useBackgroundScanning {
                 self.locationManager.allowsBackgroundLocationUpdates = true
                 self.locationManager.pausesLocationUpdatesAutomatically = false
             }
             let uuid = UUID(uuidString: uuid)!
               self.beaconRegion = CLBeaconRegion(proximityUUID: uuid, identifier: "RNIbeaconScannerRegion")
-            
+
             self.locationManager.startMonitoring(for: self.beaconRegion)
             self.locationManager.startRangingBeacons(in: self.beaconRegion)
           }
@@ -37,7 +37,7 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
           //TODO Handling older versions
       }
   }
-    
+
     @objc func stopScanning() {
         if let beaconRegion = self.beaconRegion {
             self.locationManager.stopMonitoring(for: beaconRegion)
@@ -46,11 +46,11 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
             self.locationManager = nil
         }
     }
-    
+
     @objc func initializeBluetoothManager() {
         centralManager = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: false])
     }
-    
+
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         var msg = ""
 
@@ -73,8 +73,8 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
         bridge.eventDispatcher().sendAppEvent(withName: "onBluetoothStateChanged", body: ["state": msg])
     }
 
-    
-    
+
+
     @objc func requestAlwaysAuthorization(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         let locationManager = CLLocationManager()
             locationManager.delegate = self
@@ -85,7 +85,7 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
             let statusString = statusToString(status)
             resolve(["status": statusString])
     }
-    
+
     @objc func requestWhenInUseAuthorization(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         let locationManager = CLLocationManager()
         locationManager.delegate = self
@@ -97,10 +97,20 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
         resolve(["status": statusString])
     }
 
-    
+
     @objc func getAuthorizationStatus(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         let status = CLLocationManager.authorizationStatus()
         resolve(statusToString(status))
+    }
+
+    @objc func setThroneUserId(_ userId: String) {
+        UserDefaults.standard.set(userId, forKey: "throneUserId")
+        UserDefaults.standard.synchronize()
+    }
+
+    @objc func getThroneUserId(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let userId = UserDefaults.standard.string(forKey: "throneUserId")
+        resolve(userId)
     }
 
 
@@ -126,7 +136,7 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
       bridge.eventDispatcher().sendAppEvent(withName: "onBeaconsDetected", body: beaconArray)
     }
   }
-  
+
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
     if #available(iOS 14.0, *) {
       if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
@@ -140,7 +150,7 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
       }
     }
   }
-    
+
     func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
         // Restart ranging when the app is paused
         locationManager.startRangingBeacons(in: beaconRegion)
@@ -150,7 +160,7 @@ class BeaconRadar: NSObject, RCTBridgeModule, CLLocationManagerDelegate, CBCentr
         // Restart ranging when the app resumes from a paused state
         locationManager.startRangingBeacons(in: beaconRegion)
     }
-    
+
     private func statusToString(_ status: CLAuthorizationStatus) -> String {
         switch status {
         case .notDetermined:
