@@ -1,10 +1,11 @@
 import { NativeModules, Platform } from "react-native"
 
-const LINKING_ERROR =
-  `The package 'react-native-beacon-radar' doesn't seem to be linked. Make sure: \n\n` +
-  Platform.select({ ios: "- You have run 'pod install'\n", default: "" }) +
-  "- You rebuilt the app after installing the package\n" +
-  "- You are not using Expo Go\n"
+const LINKING_ERROR = `The package 'react-native-beacon-radar' doesn't seem to be linked. Make sure: \n\n${Platform.select(
+  {
+    ios: "- You have run 'pod install'\n",
+    default: "",
+  },
+)}- You rebuilt the app after installing the package\n- You are not using Expo Go\n`
 
 const BeaconRadar = NativeModules.BeaconRadar
   ? NativeModules.BeaconRadar
@@ -84,4 +85,13 @@ export function getMaxDistance(): Promise<number> {
 
 export function canDrawOverlays(): Promise<boolean> {
   return BeaconRadar.canDrawOverlays?.()
+}
+
+// BLE Connection Methods
+export function setThroneUserId(userId: string): Promise<boolean> {
+  return BeaconRadar.setThroneUserId?.(userId)
+}
+
+export function getThroneUserId(): Promise<string> {
+  return BeaconRadar.getThroneUserId?.()
 }
