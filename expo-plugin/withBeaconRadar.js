@@ -1,4 +1,4 @@
-const { withAndroidManifest, withInfoPlist } = require("@expo/config-plugins")
+const { withAndroidManifest, withInfoPlist } = require("expo/config-plugins")
 
 const withBeaconRadar = (config) => {
   // Android configurations
