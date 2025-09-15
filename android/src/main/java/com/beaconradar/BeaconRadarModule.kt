@@ -57,7 +57,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         private const val PREFS_NAME = "BeaconRadarPrefs"
         private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
         private const val USER_ID_KEY = "throneUserId"
-        private var MAX_DISTANCE = 4.0
+        private var MAX_DISTANCE = 0.4
         @JvmStatic
         var instance: BeaconRadarModule? = null
 
@@ -477,7 +477,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
          createNotificationChannel()
         // Create content for the notification
         val distanceText = when {
-            beacon.distance < 1.0 -> "Very close (${String.format("%.2f", beacon.distance)}m)"
+            beacon.distance < 0 -> "Very close (${String.format("%.2f", beacon.distance)}m)"
             beacon.distance < 4.0 -> "Near (${String.format("%.2f", beacon.distance)}m)"
             else -> "Far (${String.format("%.2f", beacon.distance)}m)"
         }
