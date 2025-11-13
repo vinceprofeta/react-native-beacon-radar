@@ -141,6 +141,11 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     fun setupForegroundService() {
         try {
+            // Guard: foreground service cannot be enabled until after location permission is granted (SDK 34+)
+            if (!hasAllRequiredPermissions()) {
+                Log.w(TAG, "Permissions not granted (fine/coarse/background and BLE on S+). Skipping enableForegroundServiceScanning.")
+                return
+            }
             val builder = NotificationCompat.Builder(reactContext, FOREGROUND_NOTIFICATION_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(FOREGROUND_NOTIFICATION_NAME)
@@ -182,6 +187,22 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             Log.d(TAG, "Cannot enable foreground service scanning. This may be because consumers are already bound: ${e.message}")
             // Continue anyway - this is not a fatal error
         }
+    }
+
+    // Centralized permission check mirroring BLE manager
+    private fun hasAllRequiredPermissions(): Boolean {
+        val fineGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val requiresBackground = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val backgroundGranted = !requiresBackground || ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val locationGranted = fineGranted && coarseGranted && backgroundGranted
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val scanGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            val connectGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            return scanGranted && connectGranted && locationGranted
+        }
+        return locationGranted
     }
 
     // MonitorNotifier implementation
