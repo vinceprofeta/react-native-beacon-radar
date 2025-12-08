@@ -76,6 +76,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         setupBeaconManager()
         // Load background mode setting from SharedPreferences
         val backgroundMode = loadBackgroundModeSetting()
+        Log.d(TAG, "Background mode: $backgroundMode")
         setBackgroundMode(backgroundMode)
         // Initialize Bluetooth manager
         bluetoothManager = BeaconBluetoothManager(reactContext)
@@ -84,6 +85,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     // Load background mode setting from SharedPreferences
     private fun loadBackgroundModeSetting(): Boolean {
         val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        Log.d(TAG, "Shared prefs: $sharedPrefs")
         // Default to true if setting doesn't exist
         return sharedPrefs.getBoolean(BACKGROUND_MODE_KEY, false)
     }
@@ -93,13 +95,34 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     private fun setBackgroundMode(enable: Boolean) {
         Log.d(TAG, "Setting background beacon scanning to: $enable")
         try {
+            // Save preference first
+            Log.d(TAG, "Saving background mode preference to: $enable")
             val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             sharedPrefs.edit().putBoolean(BACKGROUND_MODE_KEY, enable).apply()
-            // Setup background scanning parameters
-            beaconManager.setEnableScheduledScanJobs(enable)
-            beaconManager.setBackgroundMode(enable)
-            beaconManager.backgroundScanPeriod = 1100L
-            beaconManager.backgroundBetweenScanPeriod = 0L
+            Log.d(TAG, "Background mode preference saved: $enable")
+
+            if (enable) {
+                // When enabling, add notifiers and restart monitoring
+                // Don't call setupForegroundService() - it's already set up from initial startScanning()
+                beaconManager.setBackgroundMode(true)
+                beaconManager.backgroundScanPeriod = 1100L
+                beaconManager.backgroundBetweenScanPeriod = 0L
+                beaconManager.addMonitorNotifier(this)
+                beaconManager.addRangeNotifier(this)
+                beaconManager.startMonitoring(region)
+                Log.d(TAG, "Background mode enabled, monitoring restarted")
+            } else {
+                // When disabling, stop all monitoring and ranging
+                try {
+                    beaconManager.stopMonitoring(region)
+                    beaconManager.stopRangingBeacons(region)
+                    beaconManager.removeMonitorNotifier(this)
+                    beaconManager.removeRangeNotifier(this)
+                    Log.d(TAG, "Stopped all beacon monitoring and ranging")
+                } catch (e: Exception) {
+                    Log.d(TAG, "Error stopping monitoring: ${e.message}")
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error setting background mode: ${e.message}")
         }

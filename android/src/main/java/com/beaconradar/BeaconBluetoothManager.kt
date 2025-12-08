@@ -294,8 +294,10 @@ class BeaconBluetoothManager(private val context: Context) {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 			val scanGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
 			val connectGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+			Log.w(TAG, "hasAllRequiredPermissions: scanGranted=$scanGranted, connectGranted=$connectGranted, locationGranted=$locationGranted")
 			return scanGranted && connectGranted && locationGranted
 		}
+        Log.w(TAG, "Skipping stopScan in cleanup due to missing scan permission. locationGranted=$locationGranted")
 		return locationGranted
 	}
 
