@@ -57,6 +57,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         private const val PREFS_NAME = "BeaconRadarPrefs"
         private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
         private const val USER_ID_KEY = "throneUserId"
+        private const val DEFAULT_REGION_UUID = "FDA50693-A4E2-4FB1-AFCF-C6EB07647825"
         private var MAX_DISTANCE = 0.4
         @JvmStatic
         var instance: BeaconRadarModule? = null
@@ -68,7 +69,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     }
 
     private val beaconManager: BeaconManager = BeaconManager.getInstanceForApplication(reactContext)
-    private var region: Region = Region("all-beacons", Identifier.parse("FDA50693-A4E2-4FB1-AFCF-C6EB07647825"), null, null)
+    private var region: Region = Region("all-beacons", Identifier.parse(DEFAULT_REGION_UUID), null, null)
     private var bluetoothManager: BeaconBluetoothManager? = null
 
     init {
@@ -86,11 +87,9 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     private fun loadBackgroundModeSetting(): Boolean {
         val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         Log.d(TAG, "Shared prefs: $sharedPrefs")
-        // Default to true if setting doesn't exist
+        // Default to false if setting doesn't exist
         return sharedPrefs.getBoolean(BACKGROUND_MODE_KEY, false)
     }
-
-
 
     private fun setBackgroundMode(enable: Boolean) {
         Log.d(TAG, "Setting background beacon scanning to: $enable")
@@ -103,24 +102,32 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
             if (enable) {
                 // When enabling, add notifiers and restart monitoring
-                // Don't call setupForegroundService() - it's already set up from initial startScanning()
-                beaconManager.setBackgroundMode(true)
-                beaconManager.backgroundScanPeriod = 1100L
-                beaconManager.backgroundBetweenScanPeriod = 0L
-                beaconManager.addMonitorNotifier(this)
-                beaconManager.addRangeNotifier(this)
-                beaconManager.startMonitoring(region)
-                Log.d(TAG, "Background mode enabled, monitoring restarted")
-            } else {
-                // When disabling, stop all monitoring and ranging
-                try {
-                    beaconManager.stopMonitoring(region)
-                    beaconManager.stopRangingBeacons(region)
+                // Re-enable foreground service scanning so monitoring survives cold start after process death.
+                setupForegroundService()
+                reactContext.runOnUiQueueThread {
+                    beaconManager.setBackgroundMode(true)
+                    beaconManager.backgroundScanPeriod = 1100L
+                    beaconManager.backgroundBetweenScanPeriod = 0L
                     beaconManager.removeMonitorNotifier(this)
                     beaconManager.removeRangeNotifier(this)
-                    Log.d(TAG, "Stopped all beacon monitoring and ranging")
-                } catch (e: Exception) {
-                    Log.d(TAG, "Error stopping monitoring: ${e.message}")
+                    beaconManager.addMonitorNotifier(this)
+                    beaconManager.addRangeNotifier(this)
+                    beaconManager.startMonitoring(region)
+                    beaconManager.requestStateForRegion(region)
+                    Log.d(TAG, "Background mode enabled, monitoring restarted for region: $region")
+                }
+            } else {
+                // When disabling, stop all monitoring and ranging
+                reactContext.runOnUiQueueThread {
+                    try {
+                        beaconManager.stopMonitoring(region)
+                        beaconManager.stopRangingBeacons(region)
+                        beaconManager.removeMonitorNotifier(this)
+                        beaconManager.removeRangeNotifier(this)
+                        Log.d(TAG, "Stopped all beacon monitoring and ranging")
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Error stopping monitoring: ${e.message}")
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -359,7 +366,9 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun startScanning(uuid: String?, config: ReadableMap?, promise: Promise) {
-        region = Region("all-beacons", Identifier.parse(uuid), null, null)
+        val resolvedUuid = uuid ?: DEFAULT_REGION_UUID
+        region = Region("all-beacons", Identifier.parse(resolvedUuid), null, null)
+        Log.d(TAG, "startScanning with region UUID: $resolvedUuid")
         setupBeaconScanning()
         promise.resolve(null)
     }
