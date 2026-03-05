@@ -51,8 +51,8 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         // private const val BACKGROUND_NOTIFICATION_ID = 12345
         private const val NOTIFICATION_CHANNEL_ID = "beacon_detector_channel"
         private const val FOREGROUND_NOTIFICATION_CHANNEL_ID = "beacon_foreground_channel"
-        private const val FOREGROUND_NOTIFICATION_NAME = "Beacon Scanner Service"
-        private const val FOREGROUND_NOTIFICATION_DESCRIPTION = "Required for background beacon scanning"
+        private const val FOREGROUND_NOTIFICATION_NAME = "Throne Hands-Free Active"
+        private const val FOREGROUND_NOTIFICATION_DESCRIPTION = "Throne is running in the background to detect your nearby device."
         private const val FOREGROUND_NOTIFICATION_ID = 456
         private const val PREFS_NAME = "BeaconRadarPrefs"
         private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
