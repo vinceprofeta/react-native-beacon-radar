@@ -60,8 +60,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         private const val FOREGROUND_SCAN_PERIOD_MS = 1100L
         private const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
         private const val BACKGROUND_SCAN_PERIOD_MS = 1100L
-        private const val BACKGROUND_BETWEEN_SCAN_PERIOD_MS = 1000L
-        private const val BEACON_EVENT_THROTTLE_MS = 1500L
+        private const val BACKGROUND_BETWEEN_SCAN_PERIOD_MS = 500L
         private const val BEACON_MAX_AGE_MS = 10000L
     }
 
@@ -72,7 +71,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     private var rangeNotifierRegistered = false
     private var monitoringActive = false
     private var rangingActive = false
-    private var lastBeaconEventAtMs = 0L
 
     init {
         instance = this
@@ -370,12 +368,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         if (!isInForeground) {
             takeActionOnBeaconDetection(nearestBeacon)
         }
-
-        val now = System.currentTimeMillis()
-        if (now - lastBeaconEventAtMs < BEACON_EVENT_THROTTLE_MS) {
-            return
-        }
-        lastBeaconEventAtMs = now
 
         reactContext.runOnUiQueueThread {
             val beaconArray = Arguments.createArray()
