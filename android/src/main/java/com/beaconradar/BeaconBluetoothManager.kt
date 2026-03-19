@@ -7,7 +7,6 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -15,7 +14,6 @@ import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import java.util.*
-import kotlinx.coroutines.*
 import androidx.core.content.ContextCompat
 import android.Manifest
 
@@ -54,21 +52,21 @@ class BeaconBluetoothManager(private val context: Context) {
 
     fun fastConnectToBeacon() {
         if (isConnecting) {
-            Log.w(TAG, "Already attempting connection, skipping")
+            debugLog("Already attempting connection, skipping")
             return
         }
 
         if (bluetoothAdapter?.isEnabled != true) {
-            Log.w(TAG, "Bluetooth is not enabled")
+            debugLog("Bluetooth is not enabled")
             cleanup()
             return
         }
 
-        Log.w(TAG, "Fast connect to beacon")
+        debugLog("Fast connect to beacon")
 
 		// Verify required permissions before proceeding
 		if (!hasAllRequiredPermissions()) {
-			Log.w(TAG, "Missing required BLE permissions (scan/connect). Aborting fastConnectToBeacon.")
+			debugLog("Missing required BLE permissions (scan/connect). Aborting fastConnectToBeacon.")
 			return
 		}
 
@@ -80,7 +78,7 @@ class BeaconBluetoothManager(private val context: Context) {
 
         // Schedule a connection timeout
         connectionTimeoutRunnable = Runnable {
-            Log.w(TAG, "Connection attempt timed out after ${CONNECTION_TIMEOUT_MS}ms")
+            debugLog("Connection attempt timed out after ${CONNECTION_TIMEOUT_MS}ms")
             cleanup()
         }
         connectionTimeoutHandler.postDelayed(connectionTimeoutRunnable!!, CONNECTION_TIMEOUT_MS)
@@ -89,7 +87,7 @@ class BeaconBluetoothManager(private val context: Context) {
     }
 
     private fun startOptimizedScan() {
-        Log.w(TAG, "Starting optimized BLE scan")
+        debugLog("Starting optimized BLE scan")
 
         val scanFilter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid.fromString("0000${THRONE_SERVICE_UUID}-0000-1000-8000-00805F9B34FB"))
@@ -104,7 +102,7 @@ class BeaconBluetoothManager(private val context: Context) {
         // Stop scan after timeout
         scanTimeoutRunnable = Runnable {
             if (bluetoothGatt == null) {
-                Log.w(TAG, "No device found after ${SCAN_TIMEOUT_MS}ms scan")
+                debugLog("No device found after ${SCAN_TIMEOUT_MS}ms scan")
                 cleanup()
             }
         }
@@ -114,14 +112,9 @@ class BeaconBluetoothManager(private val context: Context) {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            Log.w(TAG, "Found device: ${device.address}, attempting connection")
+            debugLog("Found device: ${device.address}, attempting connection")
 
-			// Stop scanning once we found a device, guarded by permissions
-			if (hasAllRequiredPermissions()) {
-				bluetoothLeScanner?.stopScan(this)
-			} else {
-				Log.w(TAG, "Skipping stopScan in onScanResult due to missing permissions")
-			}
+			stopScanSafely("onScanResult")
 
             scanTimeoutRunnable?.let { connectionTimeoutHandler.removeCallbacks(it) }
 
@@ -138,13 +131,13 @@ class BeaconBluetoothManager(private val context: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.w(TAG, "Connected to device: ${gatt.device.address}")
+                    debugLog("Connected to device: ${gatt.device.address}")
                     bluetoothGatt = gatt
-                    Log.w(TAG, "Starting service discovery")
+                    debugLog("Starting service discovery")
                     gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.w(TAG, "Disconnected: status=$status")
+                    debugLog("Disconnected: status=$status")
                     cleanup()
                 }
             }
@@ -157,25 +150,25 @@ class BeaconBluetoothManager(private val context: Context) {
                 return
             }
 
-            Log.w(TAG, "Services discovered: ${gatt.services.size}")
+            debugLog("Services discovered: ${gatt.services.size}")
 
             val service = gatt.getService(UUID.fromString(THRONE_FULL_SERVICE_UUID))
             if (service == null) {
                 Log.e(TAG, "Throne service not found")
                 gatt.services.forEach { svc ->
-                    Log.w(TAG, "Found service: ${svc.uuid}")
+                    debugLog("Found service: ${svc.uuid}")
                 }
                 cleanup()
                 return
             }
 
-            Log.w(TAG, "Found Throne service: ${service.uuid}")
+            debugLog("Found Throne service: ${service.uuid}")
 
             // Write auth message to all characteristics
             service.characteristics.forEach { characteristic ->
-                Log.w(TAG, "Found characteristic: ${characteristic.uuid}")
+                debugLog("Found characteristic: ${characteristic.uuid}")
                 val authMessage = createAuthMessage()
-                Log.w(TAG, "Sending auth message: ${authMessage.toHexString()}")
+                debugLog("Sending auth message: ${authMessage.toHexString()}")
                 characteristic.value = authMessage
                 gatt.writeCharacteristic(characteristic)
             }
@@ -192,7 +185,7 @@ class BeaconBluetoothManager(private val context: Context) {
                 return
             }
 
-            Log.w(TAG, "Write successful. Reading response...")
+            debugLog("Write successful. Reading response...")
             gatt.readCharacteristic(characteristic)
         }
 
@@ -209,9 +202,9 @@ class BeaconBluetoothManager(private val context: Context) {
 
             val value = characteristic.value
             if (value != null && value.isNotEmpty()) {
-                Log.w(TAG, "Serialized response (hex): ${value.toHexString()}")
+                debugLog("Serialized response (hex): ${value.toHexString()}")
             } else {
-                Log.w(TAG, "No response data")
+                debugLog("No response data")
             }
 
             // We're done
@@ -220,7 +213,7 @@ class BeaconBluetoothManager(private val context: Context) {
     }
 
     private fun createAuthMessage(): ByteArray {
-        Log.w(TAG, "Creating auth message")
+        debugLog("Creating auth message")
         val message = mutableListOf<Byte>()
 
         // Device ID field - Field 1, wire type 2 (length-delimited)
@@ -249,7 +242,7 @@ class BeaconBluetoothManager(private val context: Context) {
         message.addAll(userMessage)
 
         val byteArray = message.toByteArray()
-        Log.w(TAG, "Serialized request (hex): ${byteArray.toHexString()}")
+        debugLog("Serialized request (hex): ${byteArray.toHexString()}")
         return byteArray
     }
 
@@ -257,28 +250,32 @@ class BeaconBluetoothManager(private val context: Context) {
         val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val userId = sharedPrefs.getString(USER_ID_KEY, "") ?: ""
         if (userId.isEmpty()) {
-            Log.w(TAG, "No throneUserId found in SharedPreferences")
+            debugLog("No throneUserId found in SharedPreferences")
         } else {
-            Log.w(TAG, "Found throneUserId in SharedPreferences: $userId")
+            debugLog("Found throneUserId in SharedPreferences: $userId")
         }
         return userId
     }
 
     fun cleanup() {
-        Log.w(TAG, "Cleaning up bluetooth")
+        debugLog("Cleaning up bluetooth")
 
         connectionTimeoutRunnable?.let { connectionTimeoutHandler.removeCallbacks(it) }
         scanTimeoutRunnable?.let { connectionTimeoutHandler.removeCallbacks(it) }
         connectionTimeoutRunnable = null
         scanTimeoutRunnable = null
 
-		if (hasAllRequiredPermissions()) {
-			bluetoothLeScanner?.stopScan(scanCallback)
-		} else {
-			Log.w(TAG, "Skipping stopScan in cleanup due to missing scan permission")
-		}
-        bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
+		stopScanSafely("cleanup")
+        try {
+            bluetoothGatt?.disconnect()
+        } catch (e: Exception) {
+            Log.w(TAG, "BluetoothGatt disconnect failed during cleanup: ${e.message}")
+        }
+        try {
+            bluetoothGatt?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "BluetoothGatt close failed during cleanup: ${e.message}")
+        }
         bluetoothGatt = null
         isConnecting = false
     }
@@ -294,12 +291,28 @@ class BeaconBluetoothManager(private val context: Context) {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 			val scanGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
 			val connectGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-			Log.w(TAG, "hasAllRequiredPermissions: scanGranted=$scanGranted, connectGranted=$connectGranted, locationGranted=$locationGranted")
+			debugLog("hasAllRequiredPermissions: scanGranted=$scanGranted, connectGranted=$connectGranted, locationGranted=$locationGranted")
 			return scanGranted && connectGranted && locationGranted
 		}
-        Log.w(TAG, "Skipping stopScan in cleanup due to missing scan permission. locationGranted=$locationGranted")
+        debugLog("hasAllRequiredPermissions (pre-S): locationGranted=$locationGranted")
 		return locationGranted
 	}
+
+    private fun stopScanSafely(source: String) {
+        try {
+            bluetoothLeScanner?.stopScan(scanCallback)
+        } catch (se: SecurityException) {
+            Log.w(TAG, "stopScan denied in $source: ${se.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "stopScan failed in $source: ${e.message}")
+        }
+    }
+
+    private fun debugLog(message: String) {
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, message)
+        }
+    }
 
     // Extension function to convert ByteArray to hex string for logging
     private fun ByteArray.toHexString(): String {
