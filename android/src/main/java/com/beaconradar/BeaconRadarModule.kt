@@ -60,7 +60,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         private const val FOREGROUND_SCAN_PERIOD_MS = 1100L
         private const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
         private const val BACKGROUND_SCAN_PERIOD_MS = 1100L
-        private const val BACKGROUND_BETWEEN_SCAN_PERIOD_MS = 500L
+        private const val BACKGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
         private const val BEACON_MAX_AGE_MS = 10000L
     }
 
@@ -358,32 +358,33 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
         val nearestBeacon = recentBeacons.minByOrNull { beacon ->
             effectiveDistance(beacon)
-        } ?: return
-        val nearestDistance = effectiveDistance(nearestBeacon)
-        if (nearestDistance > MAX_DISTANCE) {
-            return
         }
+        val nearestDistance = nearestBeacon?.let { effectiveDistance(it) } ?: Double.MAX_VALUE
 
-        val isInForeground = reactContext.currentActivity?.hasWindowFocus() == true
-        if (!isInForeground) {
-            takeActionOnBeaconDetection(nearestBeacon)
+        if (nearestDistance <= MAX_DISTANCE) {
+            val isInForeground = reactContext.currentActivity?.hasWindowFocus() == true
+            if (!isInForeground && nearestBeacon != null) {
+                takeActionOnBeaconDetection(nearestBeacon)
+            }
         }
 
         reactContext.runOnUiQueueThread {
             val beaconArray = Arguments.createArray()
-            val beaconMap = Arguments.createMap().apply {
-                putString("uuid", nearestBeacon.id1?.toString() ?: "")
-                putString("major", nearestBeacon.id2?.toString() ?: "")
-                putString("minor", nearestBeacon.id3?.toString() ?: "")
-                putDouble("distance", nearestDistance)
-                putInt("rssi", nearestBeacon.rssi)
-                putInt("txPower", nearestBeacon.txPower)
-                putString("bluetoothName", nearestBeacon.bluetoothName ?: "")
-                putString("bluetoothAddress", nearestBeacon.bluetoothAddress ?: "")
-                putInt("manufacturer", nearestBeacon.manufacturer)
-                putDouble("timestamp", nearestBeacon.lastCycleDetectionTimestamp.toDouble())
+            recentBeacons.forEach { beacon ->
+                val beaconMap = Arguments.createMap().apply {
+                    putString("uuid", beacon.id1?.toString() ?: "")
+                    putString("major", beacon.id2?.toString() ?: "")
+                    putString("minor", beacon.id3?.toString() ?: "")
+                    putDouble("distance", effectiveDistance(beacon))
+                    putInt("rssi", beacon.rssi)
+                    putInt("txPower", beacon.txPower)
+                    putString("bluetoothName", beacon.bluetoothName ?: "")
+                    putString("bluetoothAddress", beacon.bluetoothAddress ?: "")
+                    putInt("manufacturer", beacon.manufacturer)
+                    putDouble("timestamp", beacon.lastCycleDetectionTimestamp.toDouble())
+                }
+                beaconArray.pushMap(beaconMap)
             }
-            beaconArray.pushMap(beaconMap)
             reactContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("onBeaconsDetected", beaconArray)
