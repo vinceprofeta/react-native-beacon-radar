@@ -66,7 +66,13 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
         if (module != null) {
             module.didEnterRegion(region)
         } else {
-            Log.w(TAG, "RN module not yet available — region entry will be handled when module initializes")
+            val ctx = context
+            if (ctx != null) {
+                BeaconPushHandler.handleRegionPresence(ctx, region, "init-provider-enter")
+                Log.i(TAG, "RN module not yet available — handled region entry natively")
+            } else {
+                Log.w(TAG, "RN module not yet available and context is null during region entry")
+            }
         }
     }
 
@@ -91,9 +97,13 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
         if (module != null) {
             module.didDetermineStateForRegion(state, region)
         } else if (state == MonitorNotifier.INSIDE) {
-            val beaconManager = context?.let { BeaconManager.getInstanceForApplication(it) } ?: return
-            beaconManager.startRangingBeacons(region)
-            Log.i(TAG, "Started ranging from InitProvider (module not yet available)")
+            val ctx = context
+            if (ctx != null) {
+                BeaconPushHandler.handleRegionPresence(ctx, region, "init-provider-state-inside")
+                Log.i(TAG, "RN module not yet available — handled INSIDE state natively")
+            } else {
+                Log.w(TAG, "RN module not yet available and context is null during INSIDE state")
+            }
         }
     }
 

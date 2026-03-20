@@ -16,6 +16,44 @@ object BeaconPushHandler {
     private const val BEACON_MAX_AGE_MS = 10000L
 
     @JvmStatic
+    fun handleRegionPresence(
+        context: Context,
+        region: Region,
+        source: String = "unknown",
+    ): Boolean {
+        if (!BeaconRadarPreferences.isBackgroundModeEnabled(context)) {
+            Log.i(TAG, "Ignoring region presence from $source because background mode is disabled")
+            return false
+        }
+
+        val beaconManager = BeaconManager.getInstanceForApplication(context)
+        ensureIBeaconParser(beaconManager)
+
+        try {
+            beaconManager.startMonitoring(region)
+        } catch (e: Exception) {
+            Log.w(TAG, "startMonitoring failed or already active for $source: ${e.message}")
+        }
+
+        try {
+            beaconManager.requestStateForRegion(region)
+        } catch (e: Exception) {
+            Log.w(TAG, "requestStateForRegion failed for $source: ${e.message}")
+        }
+
+        try {
+            beaconManager.startRangingBeacons(region)
+        } catch (e: Exception) {
+            Log.w(TAG, "startRangingBeacons failed or already active for $source: ${e.message}")
+        }
+
+        val connectStarted = BeaconBluetoothManager.triggerFastConnect(context, "region:$source")
+        BeaconRadarModule.instance?.retryForegroundServiceIfNeeded()
+        Log.i(TAG, "Processed region presence from $source; connectStarted=$connectStarted")
+        return connectStarted
+    }
+
+    @JvmStatic
     fun handlePayload(
         context: Context,
         payload: Map<String, *>?,
