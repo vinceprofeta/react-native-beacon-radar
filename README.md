@@ -40,6 +40,7 @@ DeviceEventEmitter.addListener('onBeaconsDetected', (beacons) => {
 | **getAuthorizationStatus**        | This methods gets the current authorization status.                                                                                                                                                                   |
 | **startScanning**                 | This method starts scanning for a certain beacon based on its UUID.                                                                                                                                                   |
 | **startRadar (Android only)**     | This method starts scanning for all beacons in range. This is only available on Android.                                                                                                                              |
+| **handlePushNotification (Android only)** | This method lets your existing push pipeline delegate `beacon_scan` payloads into the native beacon handler without registering another `FirebaseMessagingService`. |
 
 
 | Event                 | Description                                                               |
@@ -63,6 +64,41 @@ This module will work with the Expo managed workflow. It will not however work w
   ]
 }
 ```
+
+## Android silent push integration
+
+Android apps should keep a single push owner and delegate beacon-trigger payloads into this package. This package does **not** register its own `FirebaseMessagingService`, so it will not compete with `expo-notifications` or another messaging SDK.
+
+### JS delegation
+
+If your existing push pipeline reaches JavaScript, call `handlePushNotification` with the notification `data` payload:
+
+```ts
+import { handlePushNotification } from "react-native-beacon-radar"
+
+await handlePushNotification({
+  beacon_scan: "true",
+})
+```
+
+### Native Android delegation
+
+If your app already owns a native `FirebaseMessagingService`, call the shared helper instead of duplicating beacon logic:
+
+```kotlin
+BeaconPushHandler.handlePayload(
+    applicationContext,
+    remoteMessage.data,
+    "fcm"
+)
+```
+
+The payload must contain `beacon_scan` for the handler to run. When accepted, the native handler will:
+
+- verify background mode is enabled
+- ensure beacon monitoring and ranging are active
+- trigger BLE fast connect in the background
+- avoid launching the visible app UI
 
 ## Contributing
 

@@ -64,6 +64,12 @@ export function getBackgroundMode(): Promise<boolean> {
   return BeaconRadar.getBackgroundMode?.()
 }
 
+export function handlePushNotification(
+  data: Record<string, any>,
+): Promise<boolean> {
+  return BeaconRadar.handlePushNotification?.(data) ?? Promise.resolve(false)
+}
+
 export function setMaxDistance(distance: number): Promise<boolean> {
   return BeaconRadar.setMaxDistance?.(distance)
 }

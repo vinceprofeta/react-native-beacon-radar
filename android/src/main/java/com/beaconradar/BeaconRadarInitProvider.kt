@@ -18,8 +18,6 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
 
     companion object {
         private const val TAG = "BeaconRadarInit"
-        private const val PREFS_NAME = "BeaconRadarPrefs"
-        private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
         const val DEFAULT_REGION_UUID = "FDA50693-A4E2-4FB1-AFCF-C6EB07647825"
 
         @Volatile
@@ -29,8 +27,7 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
 
     override fun onCreate(): Boolean {
         val ctx = context ?: return false
-        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val backgroundEnabled = prefs.getBoolean(BACKGROUND_MODE_KEY, false)
+        val backgroundEnabled = BeaconRadarPreferences.isBackgroundModeEnabled(ctx)
 
         Log.i(TAG, "InitProvider.onCreate — backgroundEnabled=$backgroundEnabled")
 
@@ -105,11 +102,17 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
     override fun didRangeBeaconsInRegion(beacons: Collection<Beacon>, region: Region) {
         if (beacons.isEmpty()) return
         Log.i(TAG, "didRangeBeacons (InitProvider): ${beacons.size} beacon(s)")
+        val ctx = context
+        if (ctx != null) {
+            BeaconPushHandler.handleRangedBeacons(ctx, beacons, "init-provider")
+        } else {
+            Log.w(TAG, "Context unavailable during ranging callback; cannot trigger native BLE")
+        }
         val module = BeaconRadarModule.instance
         if (module != null) {
             module.didRangeBeaconsInRegion(beacons, region)
         } else {
-            Log.w(TAG, "RN module not yet available — ${beacons.size} beacon(s) detected but cannot forward to JS")
+            Log.w(TAG, "RN module not yet available — native BLE path handled without JS bridge")
         }
     }
 

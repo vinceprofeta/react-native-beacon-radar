@@ -34,6 +34,54 @@ class BeaconBluetoothManager(private val context: Context) {
         private const val ACTION_FIELD_TAG: Byte = 0x08
         private const val USER_ID_FIELD_TAG: Byte = 0x12
         private const val AUTH_ACTION_VALUE: Byte = 0x04
+        private const val CONNECT_RETRY_DEBOUNCE_MS = 5000L
+
+        @Volatile
+        private var activeManager: BeaconBluetoothManager? = null
+
+        @Volatile
+        private var activeSource: String? = null
+
+        @Volatile
+        private var lastAttemptStartedAtMs: Long = 0L
+
+        @JvmStatic
+        @Synchronized
+        fun triggerFastConnect(context: Context, source: String = "unknown"): Boolean {
+            activeManager?.let { manager ->
+                if (manager.isConnecting) {
+                    Log.i(TAG, "Fast connect already in progress from $activeSource; skipping $source")
+                    return false
+                }
+            }
+
+            val now = System.currentTimeMillis()
+            if (now - lastAttemptStartedAtMs < CONNECT_RETRY_DEBOUNCE_MS) {
+                Log.i(TAG, "Fast connect debounced; last source=$activeSource, skipping $source")
+                return false
+            }
+
+            val manager = BeaconBluetoothManager(context.applicationContext)
+            activeManager = manager
+            activeSource = source
+            lastAttemptStartedAtMs = now
+            manager.fastConnectToBeaconInternal(source)
+            return true
+        }
+
+        @JvmStatic
+        @Synchronized
+        fun cancelActiveConnect() {
+            activeManager?.cleanup()
+        }
+
+        @Synchronized
+        private fun clearActiveManager(manager: BeaconBluetoothManager) {
+            if (activeManager === manager) {
+                activeManager = null
+                activeSource = null
+            }
+        }
     }
 
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -50,25 +98,30 @@ class BeaconBluetoothManager(private val context: Context) {
         bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
     }
 
-    fun fastConnectToBeacon() {
+    fun fastConnectToBeacon(): Boolean {
+        return triggerFastConnect(context, "instance")
+    }
+
+    private fun fastConnectToBeaconInternal(source: String) {
         if (isConnecting) {
-            log("Already attempting connection, skipping")
+            log("Already attempting connection, skipping source=$source")
             return
         }
 
         if (bluetoothAdapter?.isEnabled != true) {
-            log("Bluetooth is not enabled")
+            log("Bluetooth is not enabled for source=$source")
             cleanup()
             return
         }
 
         if (!hasAllRequiredPermissions()) {
-            log("Missing required BLE permissions. Aborting.")
+            log("Missing required BLE permissions. Aborting source=$source")
+            clearActiveManager(this)
             return
         }
 
         isConnecting = true
-        log("Starting fast connect to beacon")
+        log("Starting fast connect to beacon source=$source")
 
         connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
         connectionTimeoutRunnable = Runnable {
@@ -295,6 +348,7 @@ class BeaconBluetoothManager(private val context: Context) {
         }
         bluetoothGatt = null
         isConnecting = false
+        clearActiveManager(this)
     }
 
     private fun hasAllRequiredPermissions(): Boolean {

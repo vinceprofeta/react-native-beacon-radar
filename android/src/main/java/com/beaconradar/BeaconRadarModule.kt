@@ -32,14 +32,12 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         const val NAME = "BeaconRadar"
         const val UPDATE = "updateBeacons"
         const val BEACONS = "beacons"
-        private const val MESSAGE_BLE_ON_BEACON_DETECTION = true
         private const val NOTIFICATION_CHANNEL_ID = "beacon_detector_channel"
         private const val FOREGROUND_NOTIFICATION_CHANNEL_ID = "beacon_foreground_channel"
         private const val FOREGROUND_NOTIFICATION_NAME = "Throne Hands-Free Active"
         private const val FOREGROUND_NOTIFICATION_DESCRIPTION = "Throne is running in the background to detect your nearby device."
         private const val FOREGROUND_NOTIFICATION_ID = 456
         private const val PREFS_NAME = "BeaconRadarPrefs"
-        private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
         private const val USER_ID_KEY = "throneUserId"
         private const val DEFAULT_REGION_UUID = "FDA50693-A4E2-4FB1-AFCF-C6EB07647825"
         private var MAX_DISTANCE = 0.4
@@ -55,7 +53,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     private val beaconManager: BeaconManager = BeaconManager.getInstanceForApplication(reactContext)
     private var region: Region = Region("all-beacons", Identifier.parse(DEFAULT_REGION_UUID), null, null)
-    private var bluetoothManager: BeaconBluetoothManager? = null
     private var monitorNotifierRegistered = false
     private var rangeNotifierRegistered = false
     private var monitoringActive = false
@@ -64,9 +61,10 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     init {
         instance = this
         setupBeaconManager()
+        MAX_DISTANCE = BeaconRadarPreferences.getMaxDistance(reactContext)
 
         val backgroundMode = loadBackgroundModeSetting()
-        log("Module init — backgroundMode=$backgroundMode, initProviderActive=${BeaconRadarInitProvider.isMonitoringInitialized}")
+        log("Module init — backgroundMode=$backgroundMode, maxDistance=$MAX_DISTANCE, initProviderActive=${BeaconRadarInitProvider.isMonitoringInitialized}")
 
         if (backgroundMode) {
             if (BeaconRadarInitProvider.isMonitoringInitialized) {
@@ -85,19 +83,16 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             setupForegroundService()
         }
 
-        bluetoothManager = BeaconBluetoothManager(reactContext)
     }
 
     private fun loadBackgroundModeSetting(): Boolean {
-        val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return sharedPrefs.getBoolean(BACKGROUND_MODE_KEY, false)
+        return BeaconRadarPreferences.isBackgroundModeEnabled(reactContext)
     }
 
     private fun setBackgroundMode(enable: Boolean) {
         log("setBackgroundMode: $enable")
         try {
-            val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            sharedPrefs.edit().putBoolean(BACKGROUND_MODE_KEY, enable).apply()
+            BeaconRadarPreferences.setBackgroundModeEnabled(reactContext, enable)
 
             if (enable) {
                 setupForegroundService()
@@ -370,16 +365,11 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         }
         if (recentBeacons.isEmpty()) return
 
-        val nearestBeacon = recentBeacons.minByOrNull { effectiveDistance(it) }
-        val nearestDistance = nearestBeacon?.let { effectiveDistance(it) } ?: Double.MAX_VALUE
-
-        if (nearestDistance <= MAX_DISTANCE && nearestBeacon != null) {
-            val isInForeground = reactContext.currentActivity?.hasWindowFocus() == true
-            if (!isInForeground) {
-                log("Beacon within range (${String.format("%.2f", nearestDistance)}m) — triggering BLE action")
-                takeActionOnBeaconDetection(nearestBeacon)
-            }
-        }
+        BeaconPushHandler.handleRangedBeacons(
+            reactContext.applicationContext,
+            recentBeacons,
+            "react-native-range"
+        )
 
         reactContext.runOnUiQueueThread {
             try {
@@ -436,12 +426,15 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun setMaxDistance(distance: Double, promise: Promise) {
+        BeaconRadarPreferences.setMaxDistance(reactContext, distance)
         MAX_DISTANCE = distance
+        log("Updated maxDistance to $distance")
         promise.resolve(distance)
     }
 
     @ReactMethod
     fun getMaxDistance(promise: Promise) {
+        MAX_DISTANCE = BeaconRadarPreferences.getMaxDistance(reactContext)
         promise.resolve(MAX_DISTANCE)
     }
 
@@ -524,6 +517,16 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun handlePushNotification(data: ReadableMap?, promise: Promise) {
+        val handled = BeaconPushHandler.handlePayload(
+            reactContext.applicationContext,
+            data?.toHashMap(),
+            "react-native"
+        )
+        promise.resolve(handled)
+    }
+
+    @ReactMethod
     fun setThroneUserId(userId: String, promise: Promise) {
         try {
             val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -561,6 +564,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             putBoolean("rangingActive", rangingActive)
             putBoolean("initProviderActive", BeaconRadarInitProvider.isMonitoringInitialized)
             putBoolean("permissionsGranted", hasAllRequiredPermissions())
+            MAX_DISTANCE = BeaconRadarPreferences.getMaxDistance(reactContext)
             putDouble("maxDistance", MAX_DISTANCE)
             try {
                 putBoolean("foregroundServiceFailed", beaconManager.foregroundServiceStartFailed())
@@ -569,16 +573,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             }
         }
         promise.resolve(diag)
-    }
-
-    private fun takeActionOnBeaconDetection(beacon: Beacon) {
-        val distance = effectiveDistance(beacon)
-        if (distance > MAX_DISTANCE) return
-
-        if (MESSAGE_BLE_ON_BEACON_DETECTION) {
-            log("Triggering BLE fast connect for beacon: ${beacon.id1}")
-            bluetoothManager?.fastConnectToBeacon()
-        }
     }
 
     private fun calculateDistance(txPower: Int, rssi: Int): Double {
@@ -607,7 +601,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         reactContext.runOnUiQueueThread {
             stopAllBeaconWork(removeNotifiers = true)
         }
-        bluetoothManager?.cleanup()
+        BeaconBluetoothManager.cancelActiveConnect()
         super.invalidate()
     }
 }
