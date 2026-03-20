@@ -26,14 +26,6 @@ export function stopScanning() {
   return BeaconRadar.stopScanning()
 }
 
-export function startForegroundService() {
-  return BeaconRadar.startForegroundService()
-}
-
-export function stopForegroundService() {
-  return BeaconRadar.stopForegroundService()
-}
-
 export function requestAlwaysAuthorization(): Promise<{ status: string }> {
   return BeaconRadar.requestAlwaysAuthorization()
 }
@@ -64,9 +56,6 @@ export function startRadar(config: any) {
 }
 
 // ANDROID ONLY
-export function initializeBluetoothManager() {
-  return BeaconRadar.initializeBluetoothManager?.()
-}
 export function enableBackgroundMode(enable: boolean): Promise<boolean> {
   return BeaconRadar.enableBackgroundMode(enable)
 }
@@ -94,4 +83,17 @@ export function setThroneUserId(userId: string): Promise<boolean> {
 
 export function getThroneUserId(): Promise<string> {
   return BeaconRadar.getThroneUserId?.()
+}
+
+// Diagnostics (Android only)
+export function getBeaconDiagnostics(): Promise<{
+  backgroundModeEnabled: boolean
+  monitoringActive: boolean
+  rangingActive: boolean
+  initProviderActive: boolean
+  permissionsGranted: boolean
+  maxDistance: number
+  foregroundServiceFailed: boolean
+}> {
+  return BeaconRadar.getBeaconDiagnostics?.()
 }

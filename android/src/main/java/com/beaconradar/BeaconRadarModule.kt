@@ -5,7 +5,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -21,7 +20,6 @@ import org.altbeacon.beacon.*
 import android.provider.Settings
 
 
-
 @ReactModule(name = BeaconRadarModule.NAME)
 class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext),
@@ -30,16 +28,11 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     RangeNotifier {
 
     companion object {
-        const val TAG = "BeaconReference"
+        const val TAG = "BeaconRadar"
         const val NAME = "BeaconRadar"
         const val UPDATE = "updateBeacons"
         const val BEACONS = "beacons"
-        private const val LAUNCH_APP_ON_BEACON_DETECTION = false
-        private const val SEND_NOTIFICATION_ON_BEACON_DETECTION = false
         private const val MESSAGE_BLE_ON_BEACON_DETECTION = true
-        // private const val BLUETOOTH_ERROR = "BLUETOOTH_ERROR"
-        // private const val PERMISSION_REQUEST_CODE = 1
-        // private const val BACKGROUND_NOTIFICATION_ID = 12345
         private const val NOTIFICATION_CHANNEL_ID = "beacon_detector_channel"
         private const val FOREGROUND_NOTIFICATION_CHANNEL_ID = "beacon_foreground_channel"
         private const val FOREGROUND_NOTIFICATION_NAME = "Throne Hands-Free Active"
@@ -53,10 +46,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         @JvmStatic
         var instance: BeaconRadarModule? = null
 
-        // Add a timestamp to track when we last launched the app
-        private var lastAppLaunchTime: Long = 0
-        // Minimum time between app launches (5 seconds)
-        private const val MIN_LAUNCH_INTERVAL = 5000L
         private const val FOREGROUND_SCAN_PERIOD_MS = 1100L
         private const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
         private const val BACKGROUND_SCAN_PERIOD_MS = 1100L
@@ -75,53 +64,60 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     init {
         instance = this
         setupBeaconManager()
-        // Load background mode setting from SharedPreferences
+
         val backgroundMode = loadBackgroundModeSetting()
-        Log.d(TAG, "Background mode: $backgroundMode")
-        setBackgroundMode(backgroundMode)
-        // Initialize Bluetooth manager
+        log("Module init — backgroundMode=$backgroundMode, initProviderActive=${BeaconRadarInitProvider.isMonitoringInitialized}")
+
+        if (backgroundMode) {
+            if (BeaconRadarInitProvider.isMonitoringInitialized) {
+                // InitProvider already started monitoring; just register our notifiers
+                // so we can forward events to JS and trigger BLE connections.
+                log("InitProvider already active — registering module notifiers alongside it")
+                registerNotifiers()
+                monitoringActive = true
+                beaconManager.requestStateForRegion(region)
+            } else {
+                // InitProvider didn't run (e.g. fresh install, pref was set after first launch).
+                // Start monitoring from here.
+                log("InitProvider did not start monitoring — starting from module init")
+                setBackgroundMode(true)
+            }
+            setupForegroundService()
+        }
+
         bluetoothManager = BeaconBluetoothManager(reactContext)
     }
 
-    // Load background mode setting from SharedPreferences
     private fun loadBackgroundModeSetting(): Boolean {
         val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        Log.d(TAG, "Shared prefs: $sharedPrefs")
-        // Default to false if setting doesn't exist
         return sharedPrefs.getBoolean(BACKGROUND_MODE_KEY, false)
     }
 
     private fun setBackgroundMode(enable: Boolean) {
-        debugLog("Setting background beacon scanning to: $enable")
+        log("setBackgroundMode: $enable")
         try {
-            // Save preference first
-            debugLog("Saving background mode preference to: $enable")
             val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             sharedPrefs.edit().putBoolean(BACKGROUND_MODE_KEY, enable).apply()
-            debugLog("Background mode preference saved: $enable")
 
             if (enable) {
-                // When enabling, add notifiers and restart monitoring
-                // Re-enable foreground service scanning so monitoring survives cold start after process death.
                 setupForegroundService()
                 reactContext.runOnUiQueueThread {
                     beaconManager.setBackgroundMode(true)
                     beaconManager.backgroundScanPeriod = BACKGROUND_SCAN_PERIOD_MS
                     beaconManager.backgroundBetweenScanPeriod = BACKGROUND_BETWEEN_SCAN_PERIOD_MS
-                    ensureNotifiersRegistered()
+                    registerNotifiers()
                     ensureMonitoringStarted()
                     beaconManager.requestStateForRegion(region)
-                    debugLog("Background mode enabled, monitoring restarted for region: $region")
+                    log("Background mode enabled, monitoring active for region: $region")
                 }
             } else {
-                // When disabling, stop all monitoring and ranging
                 reactContext.runOnUiQueueThread {
                     try {
                         beaconManager.setBackgroundMode(false)
                         stopAllBeaconWork(removeNotifiers = true)
-                        debugLog("Stopped all beacon monitoring and ranging")
+                        log("Stopped all beacon monitoring and ranging")
                     } catch (e: Exception) {
-                        debugLog("Error stopping monitoring: ${e.message}")
+                        Log.e(TAG, "Error stopping monitoring: ${e.message}")
                     }
                 }
             }
@@ -132,45 +128,38 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     private fun setupBeaconManager() {
         BeaconManager.setDebug(BuildConfig.DEBUG)
-        val iBeaconParser = BeaconParser()
-            .setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24") //ibeacon layout
-        beaconManager.beaconParsers.add(iBeaconParser)
 
+        if (beaconManager.beaconParsers.none { it.layout == "m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24" }) {
+            val iBeaconParser = BeaconParser()
+                .setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24")
+            beaconManager.beaconParsers.add(iBeaconParser)
+        }
 
         beaconManager.foregroundScanPeriod = FOREGROUND_SCAN_PERIOD_MS
         beaconManager.foregroundBetweenScanPeriod = FOREGROUND_BETWEEN_SCAN_PERIOD_MS
         beaconManager.backgroundScanPeriod = BACKGROUND_SCAN_PERIOD_MS
         beaconManager.backgroundBetweenScanPeriod = BACKGROUND_BETWEEN_SCAN_PERIOD_MS
 
-        debugLog("BeaconManager setup complete")
+        log("BeaconManager setup complete")
     }
 
-    fun setupBeaconScanning() {
-        debugLog("Setting up BeaconManager with iBeacon parser")
-        reactContext.runOnUiQueueThread {
-            ensureNotifiersRegistered()
+    /**
+     * Registers this module as a monitor/range notifier on BeaconManager.
+     * Safe to call multiple times — tracks registration state and removes
+     * old notifiers before re-adding to prevent duplicate callbacks.
+     */
+    private fun registerNotifiers() {
+        if (monitorNotifierRegistered) {
+            beaconManager.removeMonitorNotifier(this)
         }
+        beaconManager.addMonitorNotifier(this)
+        monitorNotifierRegistered = true
 
-        setupForegroundService()
-
-        // Only start monitoring here - ranging will be started when a region is entered
-        debugLog("Starting monitoring for region: $region")
-        reactContext.runOnUiQueueThread {
-            debugLog("Requesting immediate state determination for region: $region")
-            ensureMonitoringStarted()
-            beaconManager.requestStateForRegion(region)
+        if (rangeNotifierRegistered) {
+            beaconManager.removeRangeNotifier(this)
         }
-    }
-
-    private fun ensureNotifiersRegistered() {
-        if (!monitorNotifierRegistered) {
-            beaconManager.addMonitorNotifier(this)
-            monitorNotifierRegistered = true
-        }
-        if (!rangeNotifierRegistered) {
-            beaconManager.addRangeNotifier(this)
-            rangeNotifierRegistered = true
-        }
+        beaconManager.addRangeNotifier(this)
+        rangeNotifierRegistered = true
     }
 
     private fun ensureMonitoringStarted() {
@@ -223,9 +212,8 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     fun setupForegroundService() {
         try {
-            // Guard: foreground service cannot be enabled until after location permission is granted (SDK 34+)
             if (!hasAllRequiredPermissions()) {
-                Log.w(TAG, "Permissions not granted (fine/coarse/background and BLE on S+). Skipping enableForegroundServiceScanning.")
+                Log.w(TAG, "Permissions not granted. Skipping enableForegroundServiceScanning.")
                 return
             }
             val builder = NotificationCompat.Builder(reactContext, FOREGROUND_NOTIFICATION_CHANNEL_ID)
@@ -233,7 +221,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                 .setContentTitle(FOREGROUND_NOTIFICATION_NAME)
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
-            // Create a default intent that opens the app's package
             val intent = reactContext.packageManager.getLaunchIntentForPackage(reactContext.packageName)
                 ?: Intent().apply {
                     setPackage(reactContext.packageName)
@@ -259,19 +246,49 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
 
-            debugLog("Calling enableForegroundServiceScanning")
+            log("Calling enableForegroundServiceScanning")
             BeaconManager.getInstanceForApplication(reactContext).enableForegroundServiceScanning(
                 builder.build(),
                 FOREGROUND_NOTIFICATION_ID
             )
-            debugLog("Back from enableForegroundServiceScanning")
+            log("enableForegroundServiceScanning succeeded")
         } catch (e: IllegalStateException) {
-            debugLog("Cannot enable foreground service scanning. This may be because consumers are already bound: ${e.message}")
-            // Continue anyway - this is not a fatal error
+            Log.w(TAG, "enableForegroundServiceScanning failed (may fall back to JobScheduler): ${e.message}")
+            checkAndRetryForegroundService()
         }
     }
 
-    // Centralized permission check mirroring BLE manager
+    /**
+     * On Android 12+, foreground service start can be blocked by the OS.
+     * AltBeacon falls back to JobScheduler (~15min detection gaps).
+     * This checks for that state and retries when possible.
+     */
+    private fun checkAndRetryForegroundService() {
+        try {
+            if (beaconManager.foregroundServiceStartFailed()) {
+                Log.w(TAG, "Foreground service start was blocked by OS — using JobScheduler fallback")
+            }
+        } catch (e: Exception) {
+            // foregroundServiceStartFailed() may not exist on older library versions
+            Log.w(TAG, "Could not check foreground service state: ${e.message}")
+        }
+    }
+
+    /**
+     * Call this from the host app when returning to foreground to retry
+     * foreground service if it was previously blocked.
+     */
+    fun retryForegroundServiceIfNeeded() {
+        try {
+            if (beaconManager.foregroundServiceStartFailed()) {
+                log("Retrying foreground service scanning from foreground event")
+                beaconManager.retryForegroundServiceScanning()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "retryForegroundServiceScanning not available: ${e.message}")
+        }
+    }
+
     private fun hasAllRequiredPermissions(): Boolean {
         val fineGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarseGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -287,111 +304,109 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         return locationGranted
     }
 
-    // MonitorNotifier implementation
-    override fun didEnterRegion(region: Region) {
-        debugLog("didEnterRegion: The user entered in the region: $region")
+    // --- MonitorNotifier ---
 
-        // Start ranging only when entering a region
-        debugLog("didEnterRegion: Starting ranging beacons for region: $region")
+    override fun didEnterRegion(region: Region) {
+        log("didEnterRegion: ${region.uniqueId}")
         ensureRangingStarted(region)
 
-
-        // Emit region enter event to JavaScript
         reactContext.runOnUiQueueThread {
-            val params = Arguments.createMap().apply {
-                putString("identifier", region.uniqueId)
-                putString("uuid", region.id1?.toString())
-                putString("major", region.id2?.toString())
-                putString("minor", region.id3?.toString())
+            try {
+                val params = Arguments.createMap().apply {
+                    putString("identifier", region.uniqueId)
+                    putString("uuid", region.id1?.toString())
+                    putString("major", region.id2?.toString())
+                    putString("minor", region.id3?.toString())
+                }
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("didEnterRegion", params)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not emit didEnterRegion to JS (bridge may not be ready): ${e.message}")
             }
-
-            reactContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit("didEnterRegion", params)
-            debugLog("didEnterRegion: Event emitted successfully")
         }
     }
 
     override fun didExitRegion(region: Region) {
-        debugLog("didExitRegion: Stopping ranging beacons for region: $region")
+        log("didExitRegion: ${region.uniqueId}")
         reactContext.runOnUiQueueThread {
             ensureRangingStopped(region)
-
-            val params = Arguments.createMap().apply {
-                putString("identifier", region.uniqueId)
-                putString("uuid", region.id1?.toString())
-                putString("major", region.id2?.toString())
-                putString("minor", region.id3?.toString())
+            try {
+                val params = Arguments.createMap().apply {
+                    putString("identifier", region.uniqueId)
+                    putString("uuid", region.id1?.toString())
+                    putString("major", region.id2?.toString())
+                    putString("minor", region.id3?.toString())
+                }
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("didExitRegion", params)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not emit didExitRegion to JS: ${e.message}")
             }
-            reactContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit("didExitRegion", params)
         }
     }
 
     override fun didDetermineStateForRegion(state: Int, region: Region) {
-        val stateStr = when(state) {
+        val stateStr = when (state) {
             MonitorNotifier.INSIDE -> "INSIDE"
             MonitorNotifier.OUTSIDE -> "OUTSIDE"
             else -> "UNKNOWN"
         }
-        debugLog("didDetermineStateForRegion: Region ${region.uniqueId} state is $stateStr")
+        log("didDetermineState: ${region.uniqueId} = $stateStr")
         if (state == MonitorNotifier.INSIDE) {
-            debugLog("didDetermineStateForRegion: Already inside region, starting ranging")
             ensureRangingStarted(region)
         }
     }
 
-    // RangeNotifier implementation
+    // --- RangeNotifier ---
+
     override fun didRangeBeaconsInRegion(beacons: Collection<Beacon>, region: Region) {
-        if (beacons.isEmpty()) {
-            return
-        }
+        if (beacons.isEmpty()) return
 
         val recentBeacons = beacons.filter { beacon ->
             val age = System.currentTimeMillis() - beacon.lastCycleDetectionTimestamp
             age < BEACON_MAX_AGE_MS
         }
-        if (recentBeacons.isEmpty()) {
-            return
-        }
+        if (recentBeacons.isEmpty()) return
 
-        val nearestBeacon = recentBeacons.minByOrNull { beacon ->
-            effectiveDistance(beacon)
-        }
+        val nearestBeacon = recentBeacons.minByOrNull { effectiveDistance(it) }
         val nearestDistance = nearestBeacon?.let { effectiveDistance(it) } ?: Double.MAX_VALUE
 
-        if (nearestDistance <= MAX_DISTANCE) {
+        if (nearestDistance <= MAX_DISTANCE && nearestBeacon != null) {
             val isInForeground = reactContext.currentActivity?.hasWindowFocus() == true
-            if (!isInForeground && nearestBeacon != null) {
+            if (!isInForeground) {
+                log("Beacon within range (${String.format("%.2f", nearestDistance)}m) — triggering BLE action")
                 takeActionOnBeaconDetection(nearestBeacon)
             }
         }
 
         reactContext.runOnUiQueueThread {
-            val beaconArray = Arguments.createArray()
-            recentBeacons.forEach { beacon ->
-                val beaconMap = Arguments.createMap().apply {
-                    putString("uuid", beacon.id1?.toString() ?: "")
-                    putString("major", beacon.id2?.toString() ?: "")
-                    putString("minor", beacon.id3?.toString() ?: "")
-                    putDouble("distance", effectiveDistance(beacon))
-                    putInt("rssi", beacon.rssi)
-                    putInt("txPower", beacon.txPower)
-                    putString("bluetoothName", beacon.bluetoothName ?: "")
-                    putString("bluetoothAddress", beacon.bluetoothAddress ?: "")
-                    putInt("manufacturer", beacon.manufacturer)
-                    putDouble("timestamp", beacon.lastCycleDetectionTimestamp.toDouble())
+            try {
+                val beaconArray = Arguments.createArray()
+                recentBeacons.forEach { beacon ->
+                    val beaconMap = Arguments.createMap().apply {
+                        putString("uuid", beacon.id1?.toString() ?: "")
+                        putString("major", beacon.id2?.toString() ?: "")
+                        putString("minor", beacon.id3?.toString() ?: "")
+                        putDouble("distance", effectiveDistance(beacon))
+                        putInt("rssi", beacon.rssi)
+                        putInt("txPower", beacon.txPower)
+                        putString("bluetoothName", beacon.bluetoothName ?: "")
+                        putString("bluetoothAddress", beacon.bluetoothAddress ?: "")
+                        putInt("manufacturer", beacon.manufacturer)
+                        putDouble("timestamp", beacon.lastCycleDetectionTimestamp.toDouble())
+                    }
+                    beaconArray.pushMap(beaconMap)
                 }
-                beaconArray.pushMap(beaconMap)
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("onBeaconsDetected", beaconArray)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not emit onBeaconsDetected to JS: ${e.message}")
             }
-            reactContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit("onBeaconsDetected", beaconArray)
         }
     }
-
-
 
     override fun getName(): String = NAME
 
@@ -400,22 +415,18 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         val resolvedUuid = uuid ?: DEFAULT_REGION_UUID
         val previousRegion = region
         region = Region("all-beacons", Identifier.parse(resolvedUuid), null, null)
-        debugLog("startScanning with region UUID: $resolvedUuid")
+        log("startScanning with region UUID: $resolvedUuid")
         reactContext.runOnUiQueueThread {
             try {
                 beaconManager.stopRangingBeacons(previousRegion)
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) {}
             try {
                 beaconManager.stopMonitoring(previousRegion)
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) {}
             rangingActive = false
             monitoringActive = false
-            monitorNotifierRegistered = false
-            rangeNotifierRegistered = false
 
-            ensureNotifiersRegistered()
+            registerNotifiers()
             ensureMonitoringStarted()
             beaconManager.requestStateForRegion(region)
         }
@@ -436,27 +447,44 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun requestAlwaysAuthorization(promise: Promise) {
-        // Implementation here
+        val status = if (hasAllRequiredPermissions()) "granted" else "denied"
+        promise.resolve(Arguments.createMap().apply { putString("status", status) })
     }
 
     @ReactMethod
-    fun initializeBluetoothManager(promise: Promise) {
-        // Implementation here
-    }
-
-    private fun getBluetoothState(): String {
-        return "unknown"
-
+    fun requestWhenInUseAuthorization(promise: Promise) {
+        val status = if (hasAllRequiredPermissions()) "granted" else "denied"
+        promise.resolve(Arguments.createMap().apply { putString("status", status) })
     }
 
     @ReactMethod
     fun getAuthorizationStatus(promise: Promise) {
-        // Implementation here
+        val status = if (hasAllRequiredPermissions()) "granted" else "denied"
+        promise.resolve(Arguments.createMap().apply { putString("status", status) })
     }
 
     @ReactMethod
-    fun runScan(uuid: String, promise: Promise) {
-        // Implementation here
+    fun isBluetoothEnabled(promise: Promise) {
+        val adapter = (reactContext.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+        promise.resolve(adapter?.isEnabled == true)
+    }
+
+    @ReactMethod
+    fun getBluetoothState(promise: Promise) {
+        val adapter = (reactContext.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+        val state = when {
+            adapter == null -> "unsupported"
+            !adapter.isEnabled -> "off"
+            else -> "on"
+        }
+        promise.resolve(state)
+    }
+
+    @ReactMethod
+    fun startRadar(config: ReadableMap?, promise: Promise) {
+        log("startRadar called")
+        val uuid = config?.getString("uuid") ?: DEFAULT_REGION_UUID
+        startScanning(uuid, config, promise)
     }
 
     @ReactMethod
@@ -471,16 +499,11 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    fun runScanForAllBeacons(promise: Promise) {
-        // Implementation here
-    }
-
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,
         grantResults: IntArray
     ): Boolean {
-
         return true
     }
 
@@ -497,7 +520,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun getBackgroundMode(promise: Promise) {
-        // Return the actual setting from SharedPreferences to ensure consistency
         promise.resolve(loadBackgroundModeSetting())
     }
 
@@ -506,7 +528,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         try {
             val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             sharedPrefs.edit().putString(USER_ID_KEY, userId).apply()
-            Log.d(TAG, "Throne user ID saved: $userId")
+            log("Throne user ID saved: $userId")
             promise.resolve(true)
         } catch (e: Exception) {
             Log.e(TAG, "Error saving throne user ID: ${e.message}")
@@ -519,7 +541,6 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         try {
             val sharedPrefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val userId = sharedPrefs.getString(USER_ID_KEY, "") ?: ""
-            Log.d(TAG, "Throne user ID: $userId")
             promise.resolve(userId)
         } catch (e: Exception) {
             Log.e(TAG, "Error getting throne user ID: ${e.message}")
@@ -527,156 +548,41 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-     @ReactMethod
+    @ReactMethod
     fun canDrawOverlays(promise: Promise) {
         promise.resolve(Settings.canDrawOverlays(reactContext))
     }
 
-    private fun createNotificationChannel() {
-        // Create the notification channel (required for Android 8.0+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Beacon Detector"
-            val descriptionText = "Detects nearby Bluetooth beacons"
-            val importance = NotificationManager.IMPORTANCE_HIGH
-            val channel = NotificationChannel(NOTIFICATION_CHANNEL_ID, name, importance).apply {
-                description = descriptionText
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 250, 500)
-                enableLights(true)
-                lightColor = 0xFF0000FF.toInt()
-                setBypassDnd(true)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setShowBadge(true)
+    @ReactMethod
+    fun getBeaconDiagnostics(promise: Promise) {
+        val diag = Arguments.createMap().apply {
+            putBoolean("backgroundModeEnabled", loadBackgroundModeSetting())
+            putBoolean("monitoringActive", monitoringActive)
+            putBoolean("rangingActive", rangingActive)
+            putBoolean("initProviderActive", BeaconRadarInitProvider.isMonitoringInitialized)
+            putBoolean("permissionsGranted", hasAllRequiredPermissions())
+            putDouble("maxDistance", MAX_DISTANCE)
+            try {
+                putBoolean("foregroundServiceFailed", beaconManager.foregroundServiceStartFailed())
+            } catch (_: Exception) {
+                putBoolean("foregroundServiceFailed", false)
             }
-
-            val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-            Log.d(TAG, "High-priority notification channel created")
         }
+        promise.resolve(diag)
     }
 
     private fun takeActionOnBeaconDetection(beacon: Beacon) {
         val distance = effectiveDistance(beacon)
-        if (distance > MAX_DISTANCE) {
-            return
-        }
-        if (LAUNCH_APP_ON_BEACON_DETECTION) {
-            launchApp()
-        }
-        if (SEND_NOTIFICATION_ON_BEACON_DETECTION) {
-            launchIntent(beacon)
-        }
+        if (distance > MAX_DISTANCE) return
+
         if (MESSAGE_BLE_ON_BEACON_DETECTION) {
-            messageBleOnBeaconDetection(beacon)
+            log("Triggering BLE fast connect for beacon: ${beacon.id1}")
+            bluetoothManager?.fastConnectToBeacon()
         }
     }
 
-    fun messageBleOnBeaconDetection(beacon: Beacon) {
-        debugLog("Messaging BLE for beacon: ${beacon.id1}")
-        bluetoothManager?.fastConnectToBeacon()
-    }
-
-     // Add a method to launch the app
-    fun launchIntent(beacon: Beacon) {
-        Log.d(TAG, "Sending beacon notification for: ${beacon.id1}")
-         createNotificationChannel()
-        // Create content for the notification
-        val distanceText = when {
-            beacon.distance < 0 -> "Very close (${String.format("%.2f", beacon.distance)}m)"
-            beacon.distance < 4.0 -> "Near (${String.format("%.2f", beacon.distance)}m)"
-            else -> "Far (${String.format("%.2f", beacon.distance)}m)"
-        }
-        val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val content = "Beacon detected: ${beacon.id1}\nDistance: $distanceText\nRSSI: ${beacon.rssi}"
-        // Create a launch intent that will open the app
-        val launchIntent = reactContext.packageManager.getLaunchIntentForPackage(reactContext.packageName)?.apply {
-            // Add flags to ensure app launches from sleep/closed state
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            // Add "from_notification" flag to track source
-            putExtra("from_notification", true)
-        }
-        // Create a pending intent with proper flags
-        val pendingIntent = PendingIntent.getActivity(
-            reactContext,
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(), // Unique request code
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        // Create a full-screen intent for important notifications (wakes up device)
-        val fullScreenIntent = PendingIntent.getActivity(
-            reactContext,
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt() + 1, // Different unique request code
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        // Build high-priority notification that can wake device
-        val builder = NotificationCompat.Builder(reactContext, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Beacon Detected")
-            .setContentText(content)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM) // Important category
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(pendingIntent)
-            .setFullScreenIntent(fullScreenIntent, true) // Add full screen intent
-            .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 500, 250, 500))
-            .setSound(null) // Vibration pattern
-        // Use a unique ID based on timestamp to avoid overwriting notifications
-        val notificationId = System.currentTimeMillis().toInt()
-        notificationManager.notify(notificationId, builder.build())
-        Log.d(TAG, "Beacon notification sent with ID: $notificationId")
-    }
-
-   fun launchApp() {
-        val targetPackage = reactContext.packageName;
-
-        try {
-            // Check if we have the permission
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                if (!Settings.canDrawOverlays(reactContext)) {
-                    Log.e(TAG, "SYSTEM_ALERT_WINDOW permission not granted")
-                    return
-                }
-            }
-
-            val launchIntent = reactContext.packageManager.getLaunchIntentForPackage(targetPackage)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_NO_USER_ACTION or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                putExtra("launched_from_external", true)
-            }
-
-            if (launchIntent != null) {
-                reactContext.startActivity(launchIntent)
-                Log.d(TAG, "App launch intent executed successfully")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error launching app: ${e.message}", e)
-        }
-    }
-
-
-    // Boot receiver class for restarting beacon scanning after device reboot
-    inner class BootCompletedReceiver : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-                Log.d(TAG, "Device rebooted, restarting beacon scanning")
-                setupBeaconScanning()
-            }
-        }
-    }
-
-    // Add this helper function to calculate distance from RSSI
     private fun calculateDistance(txPower: Int, rssi: Int): Double {
-        if (rssi == 0) {
-            return -1.0 // Can't determine distance without RSSI
-        }
-
-        // Standard formula for estimating distance from RSSI and txPower
-        // This is the same formula used by the AltBeacon library internally
+        if (rssi == 0) return -1.0
         return Math.pow(10.0, (txPower - rssi) / 20.0)
     }
 
@@ -688,10 +594,13 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun debugLog(message: String) {
-        if (BuildConfig.DEBUG) {
-            Log.d(TAG, message)
-        }
+    /**
+     * Always-on logging. Uses Log.i so messages appear in logcat for release builds
+     * (filterable by tag "BeaconRadar"). This is critical for diagnosing background
+     * trigger failures on real devices.
+     */
+    private fun log(message: String) {
+        Log.i(TAG, message)
     }
 
     override fun invalidate() {
@@ -701,7 +610,4 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         bluetoothManager?.cleanup()
         super.invalidate()
     }
-
-
-
 }
