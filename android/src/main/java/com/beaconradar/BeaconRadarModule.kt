@@ -1,16 +1,6 @@
 package com.beaconradar
 
-import android.Manifest
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -31,27 +21,17 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         const val NAME = "BeaconRadar"
         const val UPDATE = "updateBeacons"
         const val BEACONS = "beacons"
-        private const val NOTIFICATION_CHANNEL_ID = "beacon_detector_channel"
-        private const val FOREGROUND_NOTIFICATION_CHANNEL_ID = "beacon_foreground_channel"
-        private const val FOREGROUND_NOTIFICATION_NAME = "Throne Hands-Free Active"
-        private const val FOREGROUND_NOTIFICATION_DESCRIPTION = "Throne is running in the background to detect your nearby device."
-        private const val FOREGROUND_NOTIFICATION_ID = 456
         private const val PREFS_NAME = "BeaconRadarPrefs"
         private const val USER_ID_KEY = "throneUserId"
-        private const val DEFAULT_REGION_UUID = "FDA50693-A4E2-4FB1-AFCF-C6EB07647825"
+        private const val DEFAULT_REGION_UUID = BeaconRadarBackgroundBootstrap.DEFAULT_REGION_UUID
         private var MAX_DISTANCE = 0.4
         @JvmStatic
         var instance: BeaconRadarModule? = null
-
-        private const val FOREGROUND_SCAN_PERIOD_MS = 1100L
-        private const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
-        private const val BACKGROUND_SCAN_PERIOD_MS = 1100L
-        private const val BACKGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
         private const val BEACON_MAX_AGE_MS = 10000L
     }
 
     private val beaconManager: BeaconManager = BeaconManager.getInstanceForApplication(reactContext)
-    private var region: Region = Region("all-beacons", Identifier.parse(DEFAULT_REGION_UUID), null, null)
+    private var region: Region = BeaconRadarBackgroundBootstrap.defaultRegion()
     private var monitorNotifierRegistered = false
     private var rangeNotifierRegistered = false
     private var monitoringActive = false
@@ -97,11 +77,9 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             BeaconRadarPreferences.setBackgroundModeEnabled(reactContext, enable)
 
             if (enable) {
-                setupForegroundService()
+                BeaconRadarBackgroundBootstrap.ensureBackgroundMonitoring(reactContext, "module-enable-background")
                 reactContext.runOnUiQueueThread {
                     beaconManager.setBackgroundMode(true)
-                    beaconManager.backgroundScanPeriod = BACKGROUND_SCAN_PERIOD_MS
-                    beaconManager.backgroundBetweenScanPeriod = BACKGROUND_BETWEEN_SCAN_PERIOD_MS
                     registerNotifiers()
                     ensureMonitoringStarted()
                     beaconManager.requestStateForRegion(region)
@@ -124,26 +102,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     }
 
     private fun setupBeaconManager() {
-        BeaconManager.setDebug(BuildConfig.DEBUG)
-
-        if (beaconManager.beaconParsers.none { it.layout == "m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24" }) {
-            val iBeaconParser = BeaconParser()
-                .setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24")
-            beaconManager.beaconParsers.add(iBeaconParser)
-        }
-
-        try {
-            beaconManager.setRegionStatePeristenceEnabled(false)
-            log("Disabled AltBeacon region state persistence")
-        } catch (e: Exception) {
-            logWarning("Could not disable AltBeacon region state persistence: ${e.message}")
-        }
-
-        beaconManager.foregroundScanPeriod = FOREGROUND_SCAN_PERIOD_MS
-        beaconManager.foregroundBetweenScanPeriod = FOREGROUND_BETWEEN_SCAN_PERIOD_MS
-        beaconManager.backgroundScanPeriod = BACKGROUND_SCAN_PERIOD_MS
-        beaconManager.backgroundBetweenScanPeriod = BACKGROUND_BETWEEN_SCAN_PERIOD_MS
-
+        BeaconRadarBackgroundBootstrap.configureBeaconManager(reactContext)
         log("BeaconManager setup complete")
     }
 
@@ -215,51 +174,8 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     }
 
     fun setupForegroundService() {
-        try {
-            if (!hasAllRequiredPermissions()) {
-                logWarning("Permissions not granted. Skipping enableForegroundServiceScanning.")
-                return
-            }
-            val builder = NotificationCompat.Builder(reactContext, FOREGROUND_NOTIFICATION_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(FOREGROUND_NOTIFICATION_NAME)
-                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-
-            val intent = reactContext.packageManager.getLaunchIntentForPackage(reactContext.packageName)
-                ?: Intent().apply {
-                    setPackage(reactContext.packageName)
-                }
-
-            val pendingIntent = PendingIntent.getActivity(
-                reactContext,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            builder.setContentIntent(pendingIntent)
-
-            val channel = NotificationChannel(
-                FOREGROUND_NOTIFICATION_CHANNEL_ID,
-                FOREGROUND_NOTIFICATION_NAME,
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = FOREGROUND_NOTIFICATION_DESCRIPTION
-            }
-
-            val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-
-            log("Calling enableForegroundServiceScanning")
-            BeaconManager.getInstanceForApplication(reactContext).enableForegroundServiceScanning(
-                builder.build(),
-                FOREGROUND_NOTIFICATION_ID
-            )
-            log("enableForegroundServiceScanning succeeded")
-        } catch (e: IllegalStateException) {
-            logWarning("enableForegroundServiceScanning failed (may fall back to JobScheduler): ${e.message}")
-            checkAndRetryForegroundService()
-        }
+        BeaconRadarBackgroundBootstrap.tryEnableForegroundServiceScanning(reactContext, beaconManager)
+        checkAndRetryForegroundService()
     }
 
     /**
@@ -294,18 +210,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     }
 
     private fun hasAllRequiredPermissions(): Boolean {
-        val fineGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val coarseGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val requiresBackground = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-        val backgroundGranted = !requiresBackground || ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val locationGranted = fineGranted && coarseGranted && backgroundGranted
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val scanGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-            val connectGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-            return scanGranted && connectGranted && locationGranted
-        }
-        return locationGranted
+        return BeaconRadarBackgroundBootstrap.hasAllRequiredPermissions(reactContext)
     }
 
     // --- MonitorNotifier ---
