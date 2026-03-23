@@ -91,6 +91,22 @@ export function getThroneUserId(): Promise<string> {
   return BeaconRadar.getThroneUserId?.()
 }
 
+export function setPosthogKey(apiKey: string): Promise<boolean> {
+  return BeaconRadar.setPosthogKey?.(apiKey)
+}
+
+export function getPosthogKey(): Promise<string> {
+  return BeaconRadar.getPosthogKey?.()
+}
+
+export function setBeaconDebug(enabled: boolean): Promise<boolean> {
+  return BeaconRadar.setBeaconDebug?.(enabled)
+}
+
+export function getBeaconDebug(): Promise<boolean> {
+  return BeaconRadar.getBeaconDebug?.()
+}
+
 // Diagnostics (Android only)
 export function getBeaconDiagnostics(): Promise<{
   backgroundModeEnabled: boolean

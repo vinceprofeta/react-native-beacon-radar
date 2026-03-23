@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
-import android.util.Log
 import java.util.*
 import androidx.core.content.ContextCompat
 import android.Manifest
@@ -50,14 +49,14 @@ class BeaconBluetoothManager(private val context: Context) {
         fun triggerFastConnect(context: Context, source: String = "unknown"): Boolean {
             activeManager?.let { manager ->
                 if (manager.isConnecting) {
-                    Log.i(TAG, "Fast connect already in progress from $activeSource; skipping $source")
+                    BeaconRadarLogger.i(context.applicationContext, TAG, "connect already in progress from $activeSource; skipping $source", type = "CONNECT_SKIPPED_ALREADY_CONNECTED")
                     return false
                 }
             }
 
             val now = System.currentTimeMillis()
             if (now - lastAttemptStartedAtMs < CONNECT_RETRY_DEBOUNCE_MS) {
-                Log.i(TAG, "Fast connect debounced; last source=$activeSource, skipping $source")
+                BeaconRadarLogger.i(context.applicationContext, TAG, "connect debounced; last source=$activeSource, skipping $source", type = "CONNECT_SKIPPED_ALREADY_SCANNING")
                 return false
             }
 
@@ -104,7 +103,7 @@ class BeaconBluetoothManager(private val context: Context) {
 
     private fun fastConnectToBeaconInternal(source: String) {
         if (isConnecting) {
-            log("Already attempting connection, skipping source=$source")
+            log("Already attempting connection, skipping source=$source", "CONNECT_SKIPPED_ALREADY_CONNECTED")
             return
         }
 
@@ -121,11 +120,11 @@ class BeaconBluetoothManager(private val context: Context) {
         }
 
         isConnecting = true
-        log("Starting fast connect to beacon source=$source")
+            log("Starting fast connect to beacon source=$source", "BLE_SCAN_STARTED")
 
         connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
         connectionTimeoutRunnable = Runnable {
-            log("Connection attempt timed out after ${CONNECTION_TIMEOUT_MS}ms")
+            log("Connection attempt timed out after ${CONNECTION_TIMEOUT_MS}ms", "CONNECTION_TIMEOUT")
             cleanup()
         }
         handler.postDelayed(connectionTimeoutRunnable!!, CONNECTION_TIMEOUT_MS)
@@ -134,7 +133,7 @@ class BeaconBluetoothManager(private val context: Context) {
     }
 
     private fun startOptimizedScan() {
-        log("Starting BLE scan for service $THRONE_SERVICE_UUID")
+        log("Starting BLE scan for service $THRONE_SERVICE_UUID", "BLE_SERVICE_SCAN_STARTED")
 
         val scanFilter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid.fromString("0000${THRONE_SERVICE_UUID}-0000-1000-8000-00805F9B34FB"))
@@ -148,7 +147,7 @@ class BeaconBluetoothManager(private val context: Context) {
 
         scanTimeoutRunnable = Runnable {
             if (bluetoothGatt == null) {
-                log("No device found after ${SCAN_TIMEOUT_MS}ms scan")
+            log("No device found after ${SCAN_TIMEOUT_MS}ms scan", "CONNECTION_TIMEOUT")
                 cleanup()
             }
         }
@@ -158,30 +157,36 @@ class BeaconBluetoothManager(private val context: Context) {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            log("Found device: ${device.address}, RSSI=${result.rssi}")
+            log("Found device: ${device.address}, RSSI=${result.rssi}", "DEVICE_FOUND")
 
             stopScanSafely("onScanResult")
             scanTimeoutRunnable?.let { handler.removeCallbacks(it) }
 
+            log("Starting connection to device: ${device.address}", "PERIPHERAL_CONNECTION_STARTED")
             bluetoothGatt = device.connectGatt(context, false, gattCallback)
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e(TAG, "Scan failed with error: $errorCode")
+            logError("Connection failed during scan: $errorCode", "CONNECTION_FAILED")
+            logError("Scan failed with error: $errorCode")
             cleanup()
         }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS && newState != BluetoothProfile.STATE_CONNECTED) {
+                logError("Connection failed: status=$status newState=$newState", "CONNECTION_FAILED")
+            }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    log("Connected to device: ${gatt.device.address}")
+                    log("Connected to device: ${gatt.device.address}", "PERIPHERAL_CONNECTED")
                     bluetoothGatt = gatt
+                    log("Starting service discovery", "SERVICE_DISCOVERY_STARTED")
                     gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    log("Disconnected: status=$status")
+                    log("Disconnected: status=$status", "DISCONNECTED")
                     cleanup()
                 }
             }
@@ -189,31 +194,40 @@ class BeaconBluetoothManager(private val context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(TAG, "Service discovery failed: $status")
+                logError("Service discovery failed: $status", "SERVICE_DISCOVERY_ERROR")
                 cleanup()
                 return
             }
 
-            log("Services discovered: ${gatt.services.size}")
+            log("Services discovered: ${gatt.services.size}", "SERVICES_DISCOVERED")
 
             val service = gatt.getService(UUID.fromString(THRONE_FULL_SERVICE_UUID))
             if (service == null) {
-                Log.e(TAG, "Throne service not found. Available: ${gatt.services.map { it.uuid }}")
+                logError("Throne service not found. Available: ${gatt.services.map { it.uuid }}", "NO_SERVICES_FOUND")
                 cleanup()
                 return
             }
 
+            log("Starting characteristic discovery for service: ${service.uuid}", "CHARACTERISTIC_DISCOVERY_STARTED")
             val notifyChar = service.getCharacteristic(UUID.fromString(THRONE_NOTIFY_CHARACTERISTIC_UUID))
             if (notifyChar == null) {
-                Log.e(TAG, "Notify characteristic not found. Available: ${service.characteristics.map { it.uuid }}")
+                logError("Characteristic discovery failed for service: ${service.uuid}", "CHARACTERISTIC_DISCOVERY_ERROR")
+                logError("Notify characteristic not found. Available: ${service.characteristics.map { it.uuid }}", "CHARACTERISTIC_NOT_FOUND")
                 cleanup()
                 return
             }
 
-            log("Found target characteristic: ${notifyChar.uuid}")
+            log("Characteristics found: ${service.characteristics.size}", "CHARACTERISTICS_FOUND")
+            log("Found target characteristic: ${notifyChar.uuid}", "CHARACTERISTICS_FOUND")
 
             // Enable notifications first so we can receive the auth response
-            gatt.setCharacteristicNotification(notifyChar, true)
+            log("Starting notification subscription for characteristic: ${notifyChar.uuid}", "NOTIFICATION_SUBSCRIPTION_STARTED")
+            val notificationsEnabled = gatt.setCharacteristicNotification(notifyChar, true)
+            if (!notificationsEnabled) {
+                logError("Notification subscription failed to start for ${notifyChar.uuid}", "NOTIFICATION_SUBSCRIPTION_FAILED")
+                cleanup()
+                return
+            }
             val descriptor = notifyChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
             if (descriptor != null) {
                 descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
@@ -229,11 +243,12 @@ class BeaconBluetoothManager(private val context: Context) {
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(TAG, "Descriptor write failed: $status")
+                logError("Notification subscription failed: $status", "NOTIFICATION_SUBSCRIPTION_FAILED")
+                logError("Descriptor write failed: $status")
                 cleanup()
                 return
             }
-            log("Notification subscription active — sending auth message")
+            log("Notification subscription active — sending auth message", "NOTIFICATION_SUBSCRIBED")
             val service = gatt.getService(UUID.fromString(THRONE_FULL_SERVICE_UUID)) ?: return
             val notifyChar = service.getCharacteristic(UUID.fromString(THRONE_NOTIFY_CHARACTERISTIC_UUID)) ?: return
             writeAuthMessage(gatt, notifyChar)
@@ -245,11 +260,11 @@ class BeaconBluetoothManager(private val context: Context) {
             status: Int
         ) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(TAG, "Auth write failed: $status")
+                logError("Auth write failed: $status", "AUTH_WRITE_ERROR")
                 cleanup()
                 return
             }
-            log("Auth write successful — waiting for notification response")
+            log("Auth write successful — waiting for notification response", "AUTH_WRITE_SENT")
         }
 
         override fun onCharacteristicChanged(
@@ -259,12 +274,12 @@ class BeaconBluetoothManager(private val context: Context) {
             val value = characteristic.value
             if (value != null && value.isNotEmpty()) {
                 val hex = value.joinToString("") { String.format("%02x", it) }
-                log("Auth response received: ${value.size} bytes, hex=$hex")
+                log("Auth response received: ${value.size} bytes, hex=$hex", "AUTH_RESPONSE_RECEIVED")
                 if (hex.contains("808")) {
-                    log("Auth SUCCESS — cleaning up")
+                    log("Auth SUCCESS — cleaning up", "SESSION_COMPLETE")
                 }
             } else {
-                log("Auth response: no value")
+                log("Auth response: no value", "AUTH_RESPONSE_EMPTY")
             }
             cleanup()
         }
@@ -277,7 +292,7 @@ class BeaconBluetoothManager(private val context: Context) {
             // Legacy fallback — prefer onCharacteristicChanged via notifications
             val value = characteristic.value
             if (value != null && value.isNotEmpty()) {
-                log("Read response (hex): ${value.joinToString("") { String.format("%02x", it) }}")
+                log("Read response (hex): ${value.joinToString("") { String.format("%02x", it) }}", "AUTH_RESPONSE_RECEIVED")
             }
             cleanup()
         }
@@ -285,7 +300,7 @@ class BeaconBluetoothManager(private val context: Context) {
 
     private fun writeAuthMessage(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
         val authMessage = createAuthMessage()
-        log("Sending auth message: ${authMessage.joinToString("") { String.format("%02x", it) }}")
+        log("Sending auth message: ${authMessage.joinToString("") { String.format("%02x", it) }}", "AUTH_MESSAGE_SENT")
         characteristic.value = authMessage
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         gatt.writeCharacteristic(characteristic)
@@ -322,13 +337,13 @@ class BeaconBluetoothManager(private val context: Context) {
         val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val userId = sharedPrefs.getString(USER_ID_KEY, "") ?: ""
         if (userId.isEmpty()) {
-            Log.w(TAG, "No throneUserId found in SharedPreferences")
+            logWarning("No throneUserId found in SharedPreferences")
         }
         return userId
     }
 
     fun cleanup() {
-        log("Cleaning up bluetooth connection")
+        log("Cleaning up bluetooth connection", "BLUETOOTH_CLEANUP_STARTED")
 
         connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
         scanTimeoutRunnable?.let { handler.removeCallbacks(it) }
@@ -339,12 +354,12 @@ class BeaconBluetoothManager(private val context: Context) {
         try {
             bluetoothGatt?.disconnect()
         } catch (e: Exception) {
-            Log.w(TAG, "BluetoothGatt disconnect failed: ${e.message}")
+            logWarning("BluetoothGatt disconnect failed: ${e.message}")
         }
         try {
             bluetoothGatt?.close()
         } catch (e: Exception) {
-            Log.w(TAG, "BluetoothGatt close failed: ${e.message}")
+            logWarning("BluetoothGatt close failed: ${e.message}")
         }
         bluetoothGatt = null
         isConnecting = false
@@ -370,13 +385,25 @@ class BeaconBluetoothManager(private val context: Context) {
         try {
             bluetoothLeScanner?.stopScan(scanCallback)
         } catch (se: SecurityException) {
-            Log.w(TAG, "stopScan denied in $source: ${se.message}")
+            logWarning("stopScan denied in $source: ${se.message}")
         } catch (e: Exception) {
-            Log.w(TAG, "stopScan failed in $source: ${e.message}")
+            logWarning("stopScan failed in $source: ${e.message}")
         }
     }
 
-    private fun log(message: String) {
-        Log.i(TAG, message)
+    private fun log(message: String, type: String = "GENERAL") {
+        if (type == "GENERAL") {
+            BeaconRadarLogger.i(context.applicationContext, TAG, message, type = type)
+        } else {
+            BeaconRadarLogger.logKeyEvent(context.applicationContext, TAG, message, type = type)
+        }
+    }
+
+    private fun logWarning(message: String, type: String = "GENERAL") {
+        BeaconRadarLogger.w(context.applicationContext, TAG, message, type = type)
+    }
+
+    private fun logError(message: String, type: String = "GENERAL") {
+        BeaconRadarLogger.e(context.applicationContext, TAG, message, type = type)
     }
 }

@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
@@ -64,20 +63,23 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         MAX_DISTANCE = BeaconRadarPreferences.getMaxDistance(reactContext)
 
         val backgroundMode = loadBackgroundModeSetting()
-        log("Module init — backgroundMode=$backgroundMode, maxDistance=$MAX_DISTANCE, initProviderActive=${BeaconRadarInitProvider.isMonitoringInitialized}")
+        log(
+            "Module init — backgroundMode=$backgroundMode, maxDistance=$MAX_DISTANCE, initProviderActive=${BeaconRadarInitProvider.isMonitoringInitialized}",
+            "THRONE_BEACON_SETUP_STARTING"
+        )
 
         if (backgroundMode) {
             if (BeaconRadarInitProvider.isMonitoringInitialized) {
                 // InitProvider already started monitoring; just register our notifiers
                 // so we can forward events to JS and trigger BLE connections.
-                log("InitProvider already active — registering module notifiers alongside it")
+                log("InitProvider already active — registering module notifiers alongside it", "BEACON_MONITORING_SETUP")
                 registerNotifiers()
                 monitoringActive = true
                 beaconManager.requestStateForRegion(region)
             } else {
                 // InitProvider didn't run (e.g. fresh install, pref was set after first launch).
                 // Start monitoring from here.
-                log("InitProvider did not start monitoring — starting from module init")
+                log("InitProvider did not start monitoring — starting from module init", "BEACON_MONITORING_SETUP")
                 setBackgroundMode(true)
             }
             setupForegroundService()
@@ -103,21 +105,21 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                     registerNotifiers()
                     ensureMonitoringStarted()
                     beaconManager.requestStateForRegion(region)
-                    log("Background mode enabled, monitoring active for region: $region")
+                    log("Background mode enabled, monitoring active for region: $region", "BEACON_MONITORING_SETUP")
                 }
             } else {
                 reactContext.runOnUiQueueThread {
                     try {
                         beaconManager.setBackgroundMode(false)
                         stopAllBeaconWork(removeNotifiers = true)
-                        log("Stopped all beacon monitoring and ranging")
+                        log("Stopped all beacon monitoring and ranging", "BEACON_MONITORING_DESTROYED")
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error stopping monitoring: ${e.message}")
+                        logError("Error stopping monitoring: ${e.message}")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error setting background mode: ${e.message}")
+            logError("Error setting background mode: ${e.message}")
         }
     }
 
@@ -128,6 +130,13 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             val iBeaconParser = BeaconParser()
                 .setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24")
             beaconManager.beaconParsers.add(iBeaconParser)
+        }
+
+        try {
+            beaconManager.setRegionStatePeristenceEnabled(false)
+            log("Disabled AltBeacon region state persistence")
+        } catch (e: Exception) {
+            logWarning("Could not disable AltBeacon region state persistence: ${e.message}")
         }
 
         beaconManager.foregroundScanPeriod = FOREGROUND_SCAN_PERIOD_MS
@@ -208,7 +217,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     fun setupForegroundService() {
         try {
             if (!hasAllRequiredPermissions()) {
-                Log.w(TAG, "Permissions not granted. Skipping enableForegroundServiceScanning.")
+                logWarning("Permissions not granted. Skipping enableForegroundServiceScanning.")
                 return
             }
             val builder = NotificationCompat.Builder(reactContext, FOREGROUND_NOTIFICATION_CHANNEL_ID)
@@ -248,7 +257,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             )
             log("enableForegroundServiceScanning succeeded")
         } catch (e: IllegalStateException) {
-            Log.w(TAG, "enableForegroundServiceScanning failed (may fall back to JobScheduler): ${e.message}")
+            logWarning("enableForegroundServiceScanning failed (may fall back to JobScheduler): ${e.message}")
             checkAndRetryForegroundService()
         }
     }
@@ -261,11 +270,11 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     private fun checkAndRetryForegroundService() {
         try {
             if (beaconManager.foregroundServiceStartFailed()) {
-                Log.w(TAG, "Foreground service start was blocked by OS — using JobScheduler fallback")
+                logWarning("Foreground service start was blocked by OS — using JobScheduler fallback")
             }
         } catch (e: Exception) {
             // foregroundServiceStartFailed() may not exist on older library versions
-            Log.w(TAG, "Could not check foreground service state: ${e.message}")
+            logWarning("Could not check foreground service state: ${e.message}")
         }
     }
 
@@ -280,7 +289,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                 beaconManager.retryForegroundServiceScanning()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "retryForegroundServiceScanning not available: ${e.message}")
+            logWarning("retryForegroundServiceScanning not available: ${e.message}")
         }
     }
 
@@ -302,7 +311,8 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     // --- MonitorNotifier ---
 
     override fun didEnterRegion(region: Region) {
-        log("didEnterRegion: ${region.uniqueId}")
+        log("didEnterRegion: ${region.uniqueId}", "BEACON_REGION_ENTERED")
+        log("Region entered; waiting for ranging callbacks", "BEACON_REGION_WAITING_FOR_RANGING")
         ensureRangingStarted(region)
 
         reactContext.runOnUiQueueThread {
@@ -317,7 +327,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                     .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("didEnterRegion", params)
             } catch (e: Exception) {
-                Log.w(TAG, "Could not emit didEnterRegion to JS (bridge may not be ready): ${e.message}")
+                logWarning("Could not emit didEnterRegion to JS (bridge may not be ready): ${e.message}")
             }
         }
     }
@@ -337,7 +347,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                     .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("didExitRegion", params)
             } catch (e: Exception) {
-                Log.w(TAG, "Could not emit didExitRegion to JS: ${e.message}")
+                logWarning("Could not emit didExitRegion to JS: ${e.message}")
             }
         }
     }
@@ -348,7 +358,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             MonitorNotifier.OUTSIDE -> "OUTSIDE"
             else -> "UNKNOWN"
         }
-        log("didDetermineState: ${region.uniqueId} = $stateStr")
+        log("didDetermineState: ${region.uniqueId} = $stateStr", "BEACON_RANGING_STARTED")
         if (state == MonitorNotifier.INSIDE) {
             ensureRangingStarted(region)
         }
@@ -393,7 +403,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                     .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("onBeaconsDetected", beaconArray)
             } catch (e: Exception) {
-                Log.w(TAG, "Could not emit onBeaconsDetected to JS: ${e.message}")
+                logWarning("Could not emit onBeaconsDetected to JS: ${e.message}")
             }
         }
     }
@@ -405,7 +415,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         val resolvedUuid = uuid ?: DEFAULT_REGION_UUID
         val previousRegion = region
         region = Region("all-beacons", Identifier.parse(resolvedUuid), null, null)
-        log("startScanning with region UUID: $resolvedUuid")
+        log("startScanning with region UUID: $resolvedUuid", "BEACON_MONITORING_SETUP")
         reactContext.runOnUiQueueThread {
             try {
                 beaconManager.stopRangingBeacons(previousRegion)
@@ -506,7 +516,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             setBackgroundMode(enable)
             promise.resolve(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Error toggling background mode: ${e.message}")
+            logError("Error toggling background mode: ${e.message}")
             promise.reject("BACKGROUND_MODE_ERROR", "Failed to set background mode: ${e.message}")
         }
     }
@@ -534,7 +544,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             log("Throne user ID saved: $userId")
             promise.resolve(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Error saving throne user ID: ${e.message}")
+            logError("Error saving throne user ID: ${e.message}")
             promise.reject("USER_ID_ERROR", "Failed to save user ID: ${e.message}")
         }
     }
@@ -546,8 +556,52 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
             val userId = sharedPrefs.getString(USER_ID_KEY, "") ?: ""
             promise.resolve(userId)
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting throne user ID: ${e.message}")
+            logError("Error getting throne user ID: ${e.message}")
             promise.reject("USER_ID_ERROR", "Failed to get user ID: ${e.message}")
+        }
+    }
+
+    @ReactMethod
+    fun setPosthogKey(apiKey: String, promise: Promise) {
+        try {
+            BeaconRadarPreferences.setPosthogKey(reactContext, apiKey)
+            log("PostHog key updated")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            logError("Error saving PostHog key: ${e.message}")
+            promise.reject("POSTHOG_KEY_ERROR", "Failed to save PostHog key: ${e.message}")
+        }
+    }
+
+    @ReactMethod
+    fun getPosthogKey(promise: Promise) {
+        try {
+            promise.resolve(BeaconRadarPreferences.getPosthogKey(reactContext))
+        } catch (e: Exception) {
+            logError("Error getting PostHog key: ${e.message}")
+            promise.reject("POSTHOG_KEY_ERROR", "Failed to get PostHog key: ${e.message}")
+        }
+    }
+
+    @ReactMethod
+    fun setBeaconDebug(enabled: Boolean, promise: Promise) {
+        try {
+            BeaconRadarPreferences.setBeaconDebugEnabled(reactContext, enabled)
+            log("Beacon debug logging set to $enabled")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            logError("Error saving beacon debug flag: ${e.message}")
+            promise.reject("BEACON_DEBUG_ERROR", "Failed to save beacon debug flag: ${e.message}")
+        }
+    }
+
+    @ReactMethod
+    fun getBeaconDebug(promise: Promise) {
+        try {
+            promise.resolve(BeaconRadarPreferences.isBeaconDebugEnabled(reactContext))
+        } catch (e: Exception) {
+            logError("Error getting beacon debug flag: ${e.message}")
+            promise.reject("BEACON_DEBUG_ERROR", "Failed to get beacon debug flag: ${e.message}")
         }
     }
 
@@ -589,12 +643,24 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
-     * Always-on logging. Uses Log.i so messages appear in logcat for release builds
-     * (filterable by tag "BeaconRadar"). This is critical for diagnosing background
-     * trigger failures on real devices.
+     * Always logs to logcat and mirrors the same message to PostHog when a key is configured.
+     * This keeps release diagnostics visible locally while preserving the iOS-style
+     * remote hands-free log stream.
      */
-    private fun log(message: String) {
-        Log.i(TAG, message)
+    private fun log(message: String, type: String = "GENERAL") {
+        if (type == "GENERAL") {
+            BeaconRadarLogger.i(reactContext.applicationContext, TAG, message, type = type)
+        } else {
+            BeaconRadarLogger.logKeyEvent(reactContext.applicationContext, TAG, message, type = type)
+        }
+    }
+
+    private fun logWarning(message: String, type: String = "GENERAL") {
+        BeaconRadarLogger.w(reactContext.applicationContext, TAG, message, type = type)
+    }
+
+    private fun logError(message: String, type: String = "GENERAL") {
+        BeaconRadarLogger.e(reactContext.applicationContext, TAG, message, type = type)
     }
 
     override fun invalidate() {

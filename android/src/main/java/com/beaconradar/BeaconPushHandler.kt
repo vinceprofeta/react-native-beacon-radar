@@ -1,7 +1,6 @@
 package com.beaconradar
 
 import android.content.Context
-import android.util.Log
 import java.util.Locale
 import org.altbeacon.beacon.Beacon
 import org.altbeacon.beacon.BeaconManager
@@ -22,7 +21,7 @@ object BeaconPushHandler {
         source: String = "unknown",
     ): Boolean {
         if (!BeaconRadarPreferences.isBackgroundModeEnabled(context)) {
-            Log.i(TAG, "Ignoring region presence from $source because background mode is disabled")
+            logInfo(context, "Ignoring region presence from $source because background mode is disabled")
             return false
         }
 
@@ -32,24 +31,24 @@ object BeaconPushHandler {
         try {
             beaconManager.startMonitoring(region)
         } catch (e: Exception) {
-            Log.w(TAG, "startMonitoring failed or already active for $source: ${e.message}")
+            logWarning(context, "startMonitoring failed or already active for $source: ${e.message}")
         }
 
         try {
             beaconManager.requestStateForRegion(region)
         } catch (e: Exception) {
-            Log.w(TAG, "requestStateForRegion failed for $source: ${e.message}")
+            logWarning(context, "requestStateForRegion failed for $source: ${e.message}")
         }
 
         try {
             beaconManager.startRangingBeacons(region)
         } catch (e: Exception) {
-            Log.w(TAG, "startRangingBeacons failed or already active for $source: ${e.message}")
+            logWarning(context, "startRangingBeacons failed or already active for $source: ${e.message}")
         }
 
         val connectStarted = BeaconBluetoothManager.triggerFastConnect(context, "region:$source")
         BeaconRadarModule.instance?.retryForegroundServiceIfNeeded()
-        Log.i(TAG, "Processed region presence from $source; connectStarted=$connectStarted")
+        logInfo(context, "Processed region presence from $source; connectStarted=$connectStarted")
         return connectStarted
     }
 
@@ -60,17 +59,20 @@ object BeaconPushHandler {
         source: String = "unknown",
     ): Boolean {
         val payloadMap = payload ?: emptyMap<String, Any?>()
-        Log.i(TAG, "handlePayload source=$source keys=${payloadMap.keys.joinToString()}")
+        logInfo(context, "Push payload received from $source", "REMOTE_NOTIFICATION_RECEIVED")
+        logInfo(context, "handlePayload source=$source keys=${payloadMap.keys.joinToString()}")
 
         if (!BeaconRadarPreferences.isBackgroundModeEnabled(context)) {
-            Log.i(TAG, "Ignoring push because background mode is disabled")
+            logInfo(context, "Ignoring push because background mode is disabled")
             return false
         }
 
         if (!containsBeaconScan(payloadMap)) {
-            Log.i(TAG, "Ignoring push because beacon_scan flag is missing")
+            logInfo(context, "Ignoring push because beacon_scan flag is missing", "PUSH_BEACON_SCAN_MISSING")
             return false
         }
+
+        logInfo(context, "beacon_scan found, starting beacon ranging", "PUSH_BEACON_SCAN_FOUND")
 
         val beaconManager = BeaconManager.getInstanceForApplication(context)
         ensureIBeaconParser(beaconManager)
@@ -85,25 +87,26 @@ object BeaconPushHandler {
         try {
             beaconManager.startMonitoring(region)
         } catch (e: Exception) {
-            Log.w(TAG, "startMonitoring failed or already active: ${e.message}")
+            logWarning(context, "startMonitoring failed or already active: ${e.message}")
         }
 
         try {
             beaconManager.requestStateForRegion(region)
         } catch (e: Exception) {
-            Log.w(TAG, "requestStateForRegion failed: ${e.message}")
+            logWarning(context, "requestStateForRegion failed: ${e.message}")
         }
 
         try {
             beaconManager.startRangingBeacons(region)
         } catch (e: Exception) {
-            Log.w(TAG, "startRangingBeacons failed or already active: ${e.message}")
+            logWarning(context, "startRangingBeacons failed or already active: ${e.message}")
         }
 
         BeaconBluetoothManager.triggerFastConnect(context, "push:$source")
         BeaconRadarModule.instance?.retryForegroundServiceIfNeeded()
 
-        Log.i(TAG, "Processed beacon push successfully")
+        logInfo(context, "Push handler accepted payload and started work", "PUSH_HANDLER_CALLED_SUCCESS")
+        logInfo(context, "Processed beacon push successfully")
         return true
     }
 
@@ -118,7 +121,7 @@ object BeaconPushHandler {
             age < BEACON_MAX_AGE_MS
         }
         if (recentBeacons.isEmpty()) {
-            Log.i(TAG, "Ignoring ranged beacons from $source because none are recent")
+            logInfo(context, "Ignoring ranged beacons from $source because none are recent")
             return false
         }
 
@@ -126,15 +129,21 @@ object BeaconPushHandler {
         val nearestDistance = effectiveDistance(nearestBeacon)
         val maxDistance = BeaconRadarPreferences.getMaxDistance(context)
 
-        Log.i(
-            TAG,
-            "Ranged ${recentBeacons.size} beacon(s) from $source; nearest=${formatDistance(nearestDistance)}m max=${formatDistance(maxDistance)}m"
-        )
-
-        if (nearestDistance > maxDistance) {
-            Log.i(TAG, "Nearest beacon is out of range for $source; skipping BLE connect")
+        if (nearestDistance < 0) {
+            logInfo(context, "Nearest beacon distance is unknown for $source", "BEACON_DISTANCE_UNKNOWN")
             return false
         }
+
+        if (nearestDistance > maxDistance) {
+            logInfo(context, "Nearest beacon is out of range for $source; skipping BLE connect", "BEACON_TOO_FAR")
+            return false
+        }
+
+        logInfo(
+            context,
+            "Ranged ${recentBeacons.size} beacon(s) from $source; nearest=${formatDistance(nearestDistance)}m max=${formatDistance(maxDistance)}m",
+            "BEACON_RANGED_WITHIN_RANGE"
+        )
 
         val connectStarted = BeaconBluetoothManager.triggerFastConnect(
             context,
@@ -180,5 +189,17 @@ object BeaconPushHandler {
 
     private fun formatDistance(distance: Double): String {
         return String.format(Locale.US, "%.2f", distance)
+    }
+
+    private fun logInfo(context: Context, message: String, type: String = "GENERAL") {
+        if (type == "GENERAL") {
+            BeaconRadarLogger.i(context.applicationContext, TAG, message, type = type)
+        } else {
+            BeaconRadarLogger.logKeyEvent(context.applicationContext, TAG, message, type = type)
+        }
+    }
+
+    private fun logWarning(context: Context, message: String, type: String = "GENERAL") {
+        BeaconRadarLogger.w(context.applicationContext, TAG, message, type = type)
     }
 }

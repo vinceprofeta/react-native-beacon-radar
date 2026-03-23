@@ -3,10 +3,8 @@ package com.beaconradar
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
-import android.content.SharedPreferences
 import android.database.Cursor
 import android.net.Uri
-import android.util.Log
 import org.altbeacon.beacon.*
 
 /**
@@ -27,19 +25,30 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
 
     override fun onCreate(): Boolean {
         val ctx = context ?: return false
+        logInfo(ctx, "InitProvider.onCreate starting", "APP_LAUNCH_START")
         val backgroundEnabled = BeaconRadarPreferences.isBackgroundModeEnabled(ctx)
 
-        Log.i(TAG, "InitProvider.onCreate — backgroundEnabled=$backgroundEnabled")
+        logInfo(ctx, "InitProvider.onCreate — backgroundEnabled=$backgroundEnabled")
 
         if (backgroundEnabled) {
             initializeMonitoring(ctx)
         }
 
+        logInfo(ctx, "InitProvider.onCreate complete", "APP_LAUNCH_COMPLETE")
         return true
     }
 
     private fun initializeMonitoring(ctx: Context) {
         val beaconManager = BeaconManager.getInstanceForApplication(ctx)
+
+        // try {
+        //     // Disable AltBeacon's persisted in/out region restore path to reduce
+        //     // background restore work and avoid waiting on stale state after process restarts.
+        //     beaconManager.setRegionStatePeristenceEnabled(false)
+        //     logInfo(ctx, "Disabled AltBeacon region state persistence")
+        // } catch (e: Exception) {
+        //     logWarning(ctx, "Could not disable AltBeacon region state persistence: ${e.message}")
+        // }
 
         if (beaconManager.beaconParsers.none { it.layout == "m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24" }) {
             val iBeaconParser = BeaconParser()
@@ -55,13 +64,14 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
         beaconManager.requestStateForRegion(region)
 
         isMonitoringInitialized = true
-        Log.i(TAG, "Background monitoring initialized from InitProvider for region: $region")
+        logInfo(ctx, "Background monitoring initialized from InitProvider for region: $region")
     }
 
     // --- MonitorNotifier ---
 
     override fun didEnterRegion(region: Region) {
-        Log.i(TAG, "didEnterRegion (InitProvider): ${region.uniqueId}")
+        logInfo(context, "didEnterRegion (InitProvider): ${region.uniqueId}", "BEACON_REGION_ENTERED")
+        logInfo(context, "Region entered; waiting for ranging callbacks", "BEACON_REGION_WAITING_FOR_RANGING")
         val module = BeaconRadarModule.instance
         if (module != null) {
             module.didEnterRegion(region)
@@ -69,20 +79,20 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
             val ctx = context
             if (ctx != null) {
                 BeaconPushHandler.handleRegionPresence(ctx, region, "init-provider-enter")
-                Log.i(TAG, "RN module not yet available — handled region entry natively")
+                logInfo(ctx, "RN module not yet available — handled region entry natively")
             } else {
-                Log.w(TAG, "RN module not yet available and context is null during region entry")
+                logWarning(null, "RN module not yet available and context is null during region entry")
             }
         }
     }
 
     override fun didExitRegion(region: Region) {
-        Log.i(TAG, "didExitRegion (InitProvider): ${region.uniqueId}")
+        logInfo(context, "didExitRegion (InitProvider): ${region.uniqueId}")
         val module = BeaconRadarModule.instance
         if (module != null) {
             module.didExitRegion(region)
         } else {
-            Log.w(TAG, "RN module not yet available — region exit noted")
+            logWarning(context, "RN module not yet available — region exit noted")
         }
     }
 
@@ -92,7 +102,7 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
             MonitorNotifier.OUTSIDE -> "OUTSIDE"
             else -> "UNKNOWN"
         }
-        Log.i(TAG, "didDetermineState (InitProvider): ${region.uniqueId} = $stateStr")
+        logInfo(context, "didDetermineState (InitProvider): ${region.uniqueId} = $stateStr", "BEACON_RANGING_STARTED")
         val module = BeaconRadarModule.instance
         if (module != null) {
             module.didDetermineStateForRegion(state, region)
@@ -100,9 +110,9 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
             val ctx = context
             if (ctx != null) {
                 BeaconPushHandler.handleRegionPresence(ctx, region, "init-provider-state-inside")
-                Log.i(TAG, "RN module not yet available — handled INSIDE state natively")
+                logInfo(ctx, "RN module not yet available — handled INSIDE state natively")
             } else {
-                Log.w(TAG, "RN module not yet available and context is null during INSIDE state")
+                logWarning(null, "RN module not yet available and context is null during INSIDE state")
             }
         }
     }
@@ -111,19 +121,31 @@ class BeaconRadarInitProvider : ContentProvider(), MonitorNotifier, RangeNotifie
 
     override fun didRangeBeaconsInRegion(beacons: Collection<Beacon>, region: Region) {
         if (beacons.isEmpty()) return
-        Log.i(TAG, "didRangeBeacons (InitProvider): ${beacons.size} beacon(s)")
+        logInfo(context, "didRangeBeacons (InitProvider): ${beacons.size} beacon(s)")
         val ctx = context
         if (ctx != null) {
             BeaconPushHandler.handleRangedBeacons(ctx, beacons, "init-provider")
         } else {
-            Log.w(TAG, "Context unavailable during ranging callback; cannot trigger native BLE")
+            logWarning(null, "Context unavailable during ranging callback; cannot trigger native BLE")
         }
         val module = BeaconRadarModule.instance
         if (module != null) {
             module.didRangeBeaconsInRegion(beacons, region)
         } else {
-            Log.w(TAG, "RN module not yet available — native BLE path handled without JS bridge")
+            logWarning(context, "RN module not yet available — native BLE path handled without JS bridge")
         }
+    }
+
+    private fun logInfo(context: Context?, message: String, type: String = "GENERAL") {
+        if (type == "GENERAL") {
+            BeaconRadarLogger.i(context?.applicationContext, TAG, message, type = type)
+        } else {
+            BeaconRadarLogger.logKeyEvent(context?.applicationContext, TAG, message, type = type)
+        }
+    }
+
+    private fun logWarning(context: Context?, message: String, type: String = "GENERAL") {
+        BeaconRadarLogger.w(context?.applicationContext, TAG, message, type = type)
     }
 
     // --- Required ContentProvider stubs ---

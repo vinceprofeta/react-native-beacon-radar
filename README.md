@@ -41,6 +41,10 @@ DeviceEventEmitter.addListener('onBeaconsDetected', (beacons) => {
 | **startScanning**                 | This method starts scanning for a certain beacon based on its UUID.                                                                                                                                                   |
 | **startRadar (Android only)**     | This method starts scanning for all beacons in range. This is only available on Android.                                                                                                                              |
 | **handlePushNotification (Android only)** | This method lets your existing push pipeline delegate `beacon_scan` payloads into the native beacon handler without registering another `FirebaseMessagingService`. |
+| **setPosthogKey (Android only)** | Sets the PostHog project API key used for native `handsFreeLog` events. |
+| **getPosthogKey (Android only)** | Returns the currently stored PostHog project API key. |
+| **setBeaconDebug (Android only)** | Enables additional native debug logging while keeping PostHog hands-free logging active. |
+| **getBeaconDebug (Android only)** | Returns whether native beacon debug logging is enabled. |
 
 
 | Event                 | Description                                                               |
@@ -99,6 +103,86 @@ The payload must contain `beacon_scan` for the handler to run. When accepted, th
 - ensure beacon monitoring and ranging are active
 - trigger BLE fast connect in the background
 - avoid launching the visible app UI
+
+## Hands-free logging
+
+Android can mirror native hands-free logs to PostHog using the `handsFreeLog` event name, matching iOS.
+
+### Setup
+
+```ts
+import {
+  setBeaconDebug,
+  setPosthogKey,
+  setThroneUserId,
+} from "react-native-beacon-radar"
+
+await setThroneUserId("user-123")
+await setPosthogKey("phc_your_project_key")
+await setBeaconDebug(true)
+```
+
+### PostHog payload
+
+When configured, Android sends a `handsFreeLog` event with properties including:
+
+- `distinct_id`
+- `message`
+- `level`
+- `type`
+- `tag`
+- `description` for key event logs
+- `elapsed` for key event logs
+
+### Android event `type` values
+
+These Android event types intentionally use the same names as the equivalent iOS event types where Android supports the same step in the flow.
+
+| Event type | Description |
+|:--|:--|
+| `APP_LAUNCH_START` | Native Android startup logging began. |
+| `APP_LAUNCH_COMPLETE` | Native Android startup logging completed. |
+| `THRONE_BEACON_SETUP_STARTING` | Hands-free native setup is starting. |
+| `BEACON_MONITORING_SETUP` | Beacon monitoring/ranging setup was enabled or resumed. |
+| `BEACON_MONITORING_DESTROYED` | Beacon monitoring/ranging was fully stopped. |
+| `BEACON_REGION_ENTERED` | The monitored beacon region was entered. |
+| `BEACON_REGION_WAITING_FOR_RANGING` | A region entry was observed and Android is waiting for ranging callbacks. |
+| `BEACON_RANGING_STARTED` | Android requested or resumed beacon ranging after region state indicated the device is inside. |
+| `REMOTE_NOTIFICATION_RECEIVED` | A push payload reached the native Android handler. |
+| `PUSH_HANDLER_CALLED_SUCCESS` | The native Android push handler accepted the payload and started work. |
+| `PUSH_BEACON_SCAN_FOUND` | A push payload contained `beacon_scan` and native ranging/connection work started. |
+| `PUSH_BEACON_SCAN_MISSING` | A push payload was received but did not include `beacon_scan`. |
+| `BEACON_DISTANCE_UNKNOWN` | A ranged beacon had an unknown/invalid distance estimate. |
+| `BEACON_RANGED_WITHIN_RANGE` | A recent beacon was ranged within the configured maximum distance. |
+| `BEACON_TOO_FAR` | A recent beacon was ranged, but was outside the configured maximum distance. |
+| `CONNECT_SKIPPED_ALREADY_CONNECTED` | A fast-connect request was skipped because a connection was already active. |
+| `CONNECT_SKIPPED_ALREADY_SCANNING` | A fast-connect request was skipped because another recent attempt was already in progress. |
+| `BLE_SCAN_STARTED` | A new fast-connect attempt began. |
+| `BLE_SERVICE_SCAN_STARTED` | BLE scanning started for the Throne service UUID. |
+| `DEVICE_FOUND` | A matching BLE device was discovered during scan. |
+| `PERIPHERAL_CONNECTION_STARTED` | Android started connecting to the discovered peripheral. |
+| `PERIPHERAL_CONNECTED` | Android connected to the Throne peripheral. |
+| `DISCONNECTED` | The BLE peripheral disconnected. |
+| `CONNECTION_FAILED` | The BLE connection attempt failed before a usable session was established. |
+| `CONNECTION_TIMEOUT` | The connection attempt timed out before success. |
+| `SERVICE_DISCOVERY_STARTED` | Android started BLE service discovery after connecting. |
+| `SERVICE_DISCOVERY_ERROR` | BLE service discovery failed. |
+| `SERVICES_DISCOVERED` | BLE services were discovered successfully. |
+| `NO_SERVICES_FOUND` | Android connected but could not find the expected Throne service. |
+| `CHARACTERISTIC_DISCOVERY_STARTED` | Android started looking up the target characteristic on the discovered service. |
+| `CHARACTERISTIC_DISCOVERY_ERROR` | Android could not complete characteristic discovery for the target service. |
+| `CHARACTERISTICS_FOUND` | The service exposed characteristics and Android found the target list to inspect. |
+| `CHARACTERISTIC_NOT_FOUND` | The expected notify characteristic was not present on the service. |
+| `NOTIFICATION_SUBSCRIPTION_STARTED` | Android started enabling notifications on the target characteristic. |
+| `NOTIFICATION_SUBSCRIPTION_FAILED` | Android failed to enable notifications on the target characteristic. |
+| `NOTIFICATION_SUBSCRIBED` | Notification subscription succeeded and Android is ready for the auth response. |
+| `AUTH_MESSAGE_SENT` | The auth payload was written to the device. |
+| `AUTH_WRITE_ERROR` | Writing the auth payload failed. |
+| `AUTH_WRITE_SENT` | The auth write completed and Android is waiting for the notification response. |
+| `AUTH_RESPONSE_RECEIVED` | A notification payload was received back from the device. |
+| `AUTH_RESPONSE_EMPTY` | A notification callback arrived without a payload. |
+| `BLUETOOTH_CLEANUP_STARTED` | Native BLE cleanup/disconnect flow started. |
+| `SESSION_COMPLETE` | The BLE auth session completed successfully and cleanup ran. |
 
 ## Contributing
 
