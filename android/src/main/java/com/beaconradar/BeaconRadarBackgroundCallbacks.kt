@@ -23,7 +23,13 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
             "didEnterRegion (background callbacks): ${region.uniqueId}",
             type = "BEACON_REGION_ENTERED"
         )
-        BeaconPushHandler.handleRegionPresence(context, region, "background-enter")
+        BeaconPushHandler.handleRegionPresence(
+            context,
+            region,
+            "background-enter",
+            ensureMonitoring = false,
+            requestRegionState = false
+        )
     }
 
     override fun didExitRegion(region: Region) {
@@ -50,7 +56,13 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
             type = "BEACON_RANGING_STARTED"
         )
         if (state == MonitorNotifier.INSIDE) {
-            BeaconPushHandler.handleRegionPresence(context, region, "background-state-inside")
+            BeaconPushHandler.handleRegionPresence(
+                context,
+                region,
+                "background-state-inside",
+                ensureMonitoring = false,
+                requestRegionState = false
+            )
         }
     }
 

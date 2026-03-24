@@ -100,7 +100,7 @@ BeaconPushHandler.handlePayload(
 The payload must contain `beacon_scan` for the handler to run. When accepted, the native handler will:
 
 - verify background mode is enabled
-- ensure beacon monitoring and ranging are active
+- start native beacon ranging work
 - trigger BLE fast connect in the background
 - avoid launching the visible app UI
 
