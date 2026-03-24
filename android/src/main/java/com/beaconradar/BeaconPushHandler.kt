@@ -19,8 +19,6 @@ object BeaconPushHandler {
         context: Context,
         region: Region,
         source: String = "unknown",
-        ensureMonitoring: Boolean = true,
-        requestRegionState: Boolean = true,
     ): Boolean {
         if (!BeaconRadarPreferences.isBackgroundModeEnabled(context)) {
             logInfo(context, "Ignoring region presence from $source because background mode is disabled")
@@ -29,22 +27,6 @@ object BeaconPushHandler {
 
         val beaconManager = BeaconManager.getInstanceForApplication(context)
         ensureIBeaconParser(beaconManager)
-
-        if (ensureMonitoring) {
-            try {
-                beaconManager.startMonitoring(region)
-            } catch (e: Exception) {
-                logWarning(context, "startMonitoring failed or already active for $source: ${e.message}")
-            }
-        }
-
-        if (requestRegionState) {
-            try {
-                beaconManager.requestStateForRegion(region)
-            } catch (e: Exception) {
-                logWarning(context, "requestStateForRegion failed for $source: ${e.message}")
-            }
-        }
 
         try {
             beaconManager.startRangingBeacons(region)

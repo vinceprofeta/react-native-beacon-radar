@@ -26,9 +26,7 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
         BeaconPushHandler.handleRegionPresence(
             context,
             region,
-            "background-enter",
-            ensureMonitoring = false,
-            requestRegionState = false
+            "background-enter"
         )
     }
 
@@ -59,9 +57,7 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
             BeaconPushHandler.handleRegionPresence(
                 context,
                 region,
-                "background-state-inside",
-                ensureMonitoring = false,
-                requestRegionState = false
+                "background-state-inside"
             )
         }
     }
