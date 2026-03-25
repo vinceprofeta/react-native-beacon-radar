@@ -26,9 +26,9 @@ object BeaconRadarBackgroundBootstrap {
         "Throne is running in the background to detect your nearby device."
     private const val FOREGROUND_NOTIFICATION_ID = 456
 
-    const val FOREGROUND_SCAN_PERIOD_MS = 1100L
+    const val FOREGROUND_SCAN_PERIOD_MS = 300L
     const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
-    const val BACKGROUND_SCAN_PERIOD_MS = 1100L
+    const val BACKGROUND_SCAN_PERIOD_MS = 300L
     const val BACKGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
 
     @Volatile
@@ -89,6 +89,8 @@ object BeaconRadarBackgroundBootstrap {
             logWarning(appCtx, "Failed to enable background mode from $source: ${e.message}")
         }
 
+        tryEnableForegroundServiceScanning(appCtx, beaconManager)
+
         val region = defaultRegion()
 
         try {
@@ -102,8 +104,6 @@ object BeaconRadarBackgroundBootstrap {
         } catch (e: Exception) {
             logWarning(appCtx, "startRangingBeacons failed from $source: ${e.message}")
         }
-
-        tryEnableForegroundServiceScanning(appCtx, beaconManager)
 
         isMonitoringInitialized = true
         logInfo(appCtx, "Background monitoring ensured from $source", "BEACON_MONITORING_SETUP")
