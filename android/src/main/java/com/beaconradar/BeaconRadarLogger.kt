@@ -9,7 +9,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 object BeaconRadarLogger {
-    private const val POSTHOG_EVENT = "handsFreeLog"
+    private const val POSTHOG_EVENT_PREFIX = "HF_"
     private const val POSTHOG_URL = "https://us.i.posthog.com/i/v0/e/"
     private const val SESSION_AUTO_RESET_MS = 60_000L
 
@@ -96,7 +96,7 @@ object BeaconRadarLogger {
         val posthogKey = BeaconRadarPreferences.getPosthogKey(context)
         if (posthogKey.isBlank()) {
             if (BeaconRadarPreferences.isBeaconDebugEnabled(context)) {
-                Log.w(tag, "PostHog key missing; skipping handsFreeLog event for: $message")
+                Log.w(tag, "PostHog key missing; skipping HF_ event for: $message")
             }
             return
         }
@@ -108,13 +108,16 @@ object BeaconRadarLogger {
             "distinct_id" to distinctId,
             "message" to logMessage,
             "level" to level,
+            "event_type" to type,
             "type" to type,
             "tag" to tag,
         )
         eventProperties.putAll(properties)
 
+        val eventName = POSTHOG_EVENT_PREFIX + type
+
         networkExecutor.execute {
-            posthog(posthogKey, eventProperties, tag)
+            posthog(posthogKey, eventName, eventProperties, tag)
         }
     }
 
@@ -136,12 +139,12 @@ object BeaconRadarLogger {
         }
     }
 
-    private fun posthog(apiKey: String, properties: Map<String, Any?>, tag: String) {
+    private fun posthog(apiKey: String, eventName: String, properties: Map<String, Any?>, tag: String) {
         var connection: HttpURLConnection? = null
         try {
             val payload = JSONObject()
                 .put("api_key", apiKey)
-                .put("event", POSTHOG_EVENT)
+                .put("event", eventName)
                 .put("properties", properties.toJsonObject())
                 .toString()
 
@@ -163,7 +166,7 @@ object BeaconRadarLogger {
                 connection.errorStream.close()
             }
         } catch (error: Exception) {
-            Log.w(tag, "Failed to send handsFreeLog event: ${error.message}")
+            Log.w(tag, "Failed to send PostHog event: ${error.message}")
         } finally {
             connection?.disconnect()
         }

@@ -110,9 +110,7 @@ export function getBeaconDebug(): Promise<boolean> {
 // Diagnostics (Android only)
 export function getBeaconDiagnostics(): Promise<{
   backgroundModeEnabled: boolean
-  monitoringActive: boolean
-  rangingActive: boolean
-  initProviderActive: boolean
+  monitoringInitialized: boolean
   permissionsGranted: boolean
   maxDistance: number
   foregroundServiceFailed: boolean

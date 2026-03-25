@@ -56,9 +56,8 @@ object BeaconRadarBackgroundBootstrap {
 
         try {
             beaconManager.setRegionStatePeristenceEnabled(false)
-            logInfo(appCtx, "Disabled AltBeacon region state persistence")
         } catch (e: Exception) {
-            logWarning(appCtx, "Could not disable AltBeacon region state persistence: ${e.message}")
+            logWarning(appCtx, "Could not disable region state persistence: ${e.message}")
         }
 
         beaconManager.foregroundScanPeriod = FOREGROUND_SCAN_PERIOD_MS
@@ -69,15 +68,20 @@ object BeaconRadarBackgroundBootstrap {
         return beaconManager
     }
 
+    /**
+     * Safe to call from any entry point (InitProvider, BootReceiver, Module, push).
+     * Configures the BeaconManager, registers the single notifier, starts monitoring,
+     * and enables the foreground service. Calling repeatedly is harmless.
+     */
     fun ensureBackgroundMonitoring(context: Context, source: String = "unknown") {
         val appCtx = context.applicationContext
         if (!BeaconRadarPreferences.isBackgroundModeEnabled(appCtx)) {
-            logInfo(appCtx, "Skipping background bootstrap from $source because background mode is disabled")
+            logInfo(appCtx, "Skipping background bootstrap from $source — background mode disabled")
             return
         }
 
         val beaconManager = configureBeaconManager(appCtx)
-        registerBackgroundNotifiers(beaconManager)
+        registerNotifiers(beaconManager)
 
         try {
             beaconManager.setBackgroundMode(true)
@@ -90,19 +94,19 @@ object BeaconRadarBackgroundBootstrap {
         try {
             beaconManager.startMonitoring(region)
         } catch (e: Exception) {
-            logWarning(appCtx, "startMonitoring failed or already active from $source: ${e.message}")
+            logWarning(appCtx, "startMonitoring failed from $source: ${e.message}")
         }
 
         try {
-            beaconManager.requestStateForRegion(region)
+            beaconManager.startRangingBeacons(region)
         } catch (e: Exception) {
-            logWarning(appCtx, "requestStateForRegion failed from $source: ${e.message}")
+            logWarning(appCtx, "startRangingBeacons failed from $source: ${e.message}")
         }
 
         tryEnableForegroundServiceScanning(appCtx, beaconManager)
 
         isMonitoringInitialized = true
-        logInfo(appCtx, "Background monitoring ensured from $source for region: $region", "BEACON_MONITORING_SETUP")
+        logInfo(appCtx, "Background monitoring ensured from $source", "BEACON_MONITORING_SETUP")
     }
 
     fun tryEnableForegroundServiceScanning(context: Context, beaconManager: BeaconManager = configureBeaconManager(context)) {
@@ -144,17 +148,15 @@ object BeaconRadarBackgroundBootstrap {
                 appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
 
-            logInfo(appCtx, "Calling enableForegroundServiceScanning")
             beaconManager.enableForegroundServiceScanning(
                 builder.build(),
                 FOREGROUND_NOTIFICATION_ID
             )
-            logInfo(appCtx, "enableForegroundServiceScanning succeeded")
         } catch (e: IllegalStateException) {
-            logWarning(appCtx, "enableForegroundServiceScanning failed (may fall back to JobScheduler): ${e.message}")
+            logWarning(appCtx, "enableForegroundServiceScanning failed: ${e.message}")
             try {
                 if (beaconManager.foregroundServiceStartFailed()) {
-                    logWarning(appCtx, "Foreground service start was blocked by OS — using JobScheduler fallback")
+                    logWarning(appCtx, "Foreground service blocked by OS — using JobScheduler fallback")
                 }
             } catch (inner: Exception) {
                 logWarning(appCtx, "Could not check foreground service state: ${inner.message}")
@@ -162,11 +164,32 @@ object BeaconRadarBackgroundBootstrap {
         }
     }
 
-    private fun registerBackgroundNotifiers(beaconManager: BeaconManager) {
+    /**
+     * Registers BeaconRadarBackgroundCallbacks as the sole notifier.
+     * Removes first to prevent duplicates — safe to call repeatedly.
+     */
+    private fun registerNotifiers(beaconManager: BeaconManager) {
         beaconManager.removeMonitorNotifier(BeaconRadarBackgroundCallbacks)
         beaconManager.removeRangeNotifier(BeaconRadarBackgroundCallbacks)
         beaconManager.addMonitorNotifier(BeaconRadarBackgroundCallbacks)
         beaconManager.addRangeNotifier(BeaconRadarBackgroundCallbacks)
+    }
+
+    /**
+     * Retries foreground service scanning if the OS previously blocked it.
+     * Lives here (not on BeaconRadarModule) so it works even when the
+     * RN bridge is not loaded (dead wake, background-only).
+     */
+    fun retryForegroundServiceIfNeeded(context: Context) {
+        try {
+            val bm = BeaconManager.getInstanceForApplication(context.applicationContext)
+            if (bm.foregroundServiceStartFailed()) {
+                logInfo(context, "Retrying foreground service scanning")
+                bm.retryForegroundServiceScanning()
+            }
+        } catch (e: Exception) {
+            logWarning(context, "retryForegroundServiceScanning not available: ${e.message}")
+        }
     }
 
     fun hasAllRequiredPermissions(context: Context): Boolean {

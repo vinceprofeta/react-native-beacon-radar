@@ -22,7 +22,7 @@ class BeaconBluetoothManager(private val context: Context) {
         private const val THRONE_SERVICE_UUID = "88FE"
         private const val THRONE_FULL_SERVICE_UUID = "20E28DFB-E639-4D07-9DFB-6C4C3164331C"
         private const val THRONE_NOTIFY_CHARACTERISTIC_UUID = "4C0D85CA-B73E-46AF-ADAF-AB8F7F150C4C"
-        private const val DEVICE_ID = "19FE8314-DF24-748E-2010-A3FF4F5B919E"
+        private const val DEVICE_ID = "19FE8314-DF24-748E-2010-A3FF4F5B919E" // this actually doesnt matter right now. we just use it to send a device id. probably need to change this at some point.
         private const val SCAN_TIMEOUT_MS = 10000L
         private const val CONNECTION_TIMEOUT_MS = 30000L
         private const val PREFS_NAME = "BeaconRadarPrefs"
