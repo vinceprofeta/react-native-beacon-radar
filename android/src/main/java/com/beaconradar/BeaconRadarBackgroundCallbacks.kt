@@ -69,7 +69,8 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
 
     override fun didRangeBeaconsInRegion(beacons: Collection<Beacon>, region: Region) {
         if (beacons.isEmpty()) {
-            BeaconRadarLogger.w(null, TAG, "No beacons found during didRangeBeaconsInRegion")
+            // we dont log this because it happens all the time.
+            // BeaconRadarLogger.w(null, TAG, "No beacons found during didRangeBeaconsInRegion")
             return
         }
         val context = appContext() ?: run {
