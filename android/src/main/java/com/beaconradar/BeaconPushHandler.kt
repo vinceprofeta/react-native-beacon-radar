@@ -39,7 +39,6 @@ object BeaconPushHandler {
             "push:$source"
         )
 
-        BeaconBluetoothManager.triggerFastConnect(context, "push:$source")
         BeaconRadarBackgroundBootstrap.retryForegroundServiceIfNeeded(context)
 
         logInfo(context, "Push handler accepted payload and started work", "PUSH_HANDLER_CALLED_SUCCESS")

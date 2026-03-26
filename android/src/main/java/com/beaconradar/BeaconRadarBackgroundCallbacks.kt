@@ -30,7 +30,6 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
             type = "BEACON_REGION_ENTERED"
         )
 
-        BeaconBluetoothManager.triggerFastConnect(context, "region:enter")
         BeaconRadarBackgroundBootstrap.retryForegroundServiceIfNeeded(context)
         BeaconRadarModule.instance?.emitDidEnterRegion(region)
     }
@@ -60,7 +59,6 @@ object BeaconRadarBackgroundCallbacks : MonitorNotifier, RangeNotifier {
             type = "BEACON_STATE_DETERMINED"
         )
         if (state == MonitorNotifier.INSIDE) {
-            BeaconBluetoothManager.triggerFastConnect(context, "region:state-inside")
             BeaconRadarBackgroundBootstrap.retryForegroundServiceIfNeeded(context)
         }
     }
