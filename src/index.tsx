@@ -64,6 +64,14 @@ export function getBackgroundMode(): Promise<boolean> {
   return BeaconRadar.getBackgroundMode?.()
 }
 
+export function setMotionDetectionEnabled(enable: boolean): Promise<boolean> {
+  return BeaconRadar.setMotionDetectionEnabled?.(enable)
+}
+
+export function getMotionDetectionEnabled(): Promise<boolean> {
+  return BeaconRadar.getMotionDetectionEnabled?.()
+}
+
 export function handlePushNotification(
   data: Record<string, any>,
 ): Promise<boolean> {
@@ -110,8 +118,10 @@ export function getBeaconDebug(): Promise<boolean> {
 // Diagnostics (Android only)
 export function getBeaconDiagnostics(): Promise<{
   backgroundModeEnabled: boolean
+  motionDetectionEnabled: boolean
   monitoringInitialized: boolean
   permissionsGranted: boolean
+  motionPermissionGranted: boolean
   maxDistance: number
   foregroundServiceFailed: boolean
 }> {

@@ -1,12 +1,16 @@
 package com.beaconradar
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.modules.core.PermissionListener
+import com.facebook.react.modules.core.PermissionAwareActivity
 import org.altbeacon.beacon.*
-import android.provider.Settings
 
 
 @ReactModule(name = BeaconRadarModule.NAME)
@@ -19,6 +23,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         const val NAME = "BeaconRadar"
         private const val PREFS_NAME = "BeaconRadarPrefs"
         private const val USER_ID_KEY = "throneUserId"
+        private const val REQUEST_CODE_ACTIVITY_RECOGNITION = 4242
 
         @JvmStatic
         var instance: BeaconRadarModule? = null
@@ -26,6 +31,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     private val beaconManager: BeaconManager = BeaconManager.getInstanceForApplication(reactContext)
     private var region: Region = BeaconRadarBackgroundBootstrap.defaultRegion()
+    private var pendingMotionPermissionPromise: Promise? = null
 
     init {
         instance = this
@@ -185,6 +191,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         try {
             beaconManager.stopMonitoring(region)
         } catch (_: Exception) {}
+        BeaconRadarBackgroundBootstrap.unregisterBackgroundReceivers(reactContext)
         log("Stopped scanning", "BEACON_MONITORING_DESTROYED")
         promise.resolve(null)
     }
@@ -193,7 +200,30 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
         requestCode: Int,
         permissions: Array<String>,
         grantResults: IntArray
-    ): Boolean = true
+    ): Boolean {
+        if (requestCode != REQUEST_CODE_ACTIVITY_RECOGNITION) {
+            return false
+        }
+
+        val promise = pendingMotionPermissionPromise
+        pendingMotionPermissionPromise = null
+
+        val granted = grantResults.isNotEmpty() &&
+            grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+
+        if (granted) {
+            BeaconRadarPreferences.setMotionDetectionEnabled(reactContext, true)
+            BeaconRadarMotionController.applyCurrentState(reactContext)
+            log("Motion detection permission granted")
+        } else {
+            BeaconRadarPreferences.setMotionDetectionEnabled(reactContext, false)
+            BeaconRadarMotionController.applyCurrentState(reactContext)
+            logWarning("Motion detection permission denied")
+        }
+
+        promise?.resolve(granted)
+        return true
+    }
 
     @ReactMethod
     fun enableBackgroundMode(enable: Boolean, promise: Promise) {
@@ -203,6 +233,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
             if (enable) {
                 BeaconRadarBackgroundBootstrap.ensureBackgroundMonitoring(reactContext, "enableBackgroundMode")
+                BeaconRadarMotionController.applyCurrentState(reactContext)
             } else {
                 try {
                     beaconManager.stopRangingBeacons(region)
@@ -210,6 +241,7 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
                 try {
                     beaconManager.stopMonitoring(region)
                 } catch (_: Exception) {}
+                BeaconRadarBackgroundBootstrap.unregisterBackgroundReceivers(reactContext)
                 log("Background mode disabled, monitoring stopped", "BEACON_MONITORING_DESTROYED")
             }
             promise.resolve(true)
@@ -222,6 +254,62 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getBackgroundMode(promise: Promise) {
         promise.resolve(BeaconRadarPreferences.isBackgroundModeEnabled(reactContext))
+    }
+
+    @ReactMethod
+    fun setMotionDetectionEnabled(enabled: Boolean, promise: Promise) {
+        try {
+            if (!enabled) {
+                BeaconRadarPreferences.setMotionDetectionEnabled(reactContext, false)
+                BeaconRadarMotionController.applyCurrentState(reactContext)
+                log("Motion detection enabled: false")
+                promise.resolve(false)
+                return
+            }
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                BeaconRadarMotionController.hasPermission(reactContext)
+            ) {
+                BeaconRadarPreferences.setMotionDetectionEnabled(reactContext, true)
+                BeaconRadarMotionController.applyCurrentState(reactContext)
+                log("Motion detection enabled: true")
+                promise.resolve(true)
+                return
+            }
+
+            if (pendingMotionPermissionPromise != null) {
+                promise.reject(
+                    "MOTION_DETECTION_REQUEST_IN_PROGRESS",
+                    "Motion detection permission request already in progress"
+                )
+                return
+            }
+
+            val activity = currentActivity as? PermissionAwareActivity
+            if (activity == null) {
+                promise.reject(
+                    "MOTION_DETECTION_ACTIVITY_REQUIRED",
+                    "An active Android activity is required to request ACTIVITY_RECOGNITION"
+                )
+                return
+            }
+
+            pendingMotionPermissionPromise = promise
+            activity.requestPermissions(
+                arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
+                REQUEST_CODE_ACTIVITY_RECOGNITION,
+                this
+            )
+        } catch (e: Exception) {
+            pendingMotionPermissionPromise = null
+            logError("Error toggling motion detection: ${e.message}")
+            promise.reject("MOTION_DETECTION_ERROR", "Failed to set motion detection: ${e.message}")
+        }
+    }
+
+    @ReactMethod
+    fun getMotionDetectionEnabled(promise: Promise) {
+        promise.resolve(BeaconRadarPreferences.isMotionDetectionEnabled(reactContext))
     }
 
     @ReactMethod
@@ -312,8 +400,10 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
     fun getBeaconDiagnostics(promise: Promise) {
         val diag = Arguments.createMap().apply {
             putBoolean("backgroundModeEnabled", BeaconRadarPreferences.isBackgroundModeEnabled(reactContext))
+            putBoolean("motionDetectionEnabled", BeaconRadarPreferences.isMotionDetectionEnabled(reactContext))
             putBoolean("monitoringInitialized", BeaconRadarBackgroundBootstrap.isMonitoringInitialized)
             putBoolean("permissionsGranted", hasAllRequiredPermissions())
+            putBoolean("motionPermissionGranted", BeaconRadarMotionController.hasPermission(reactContext))
             putDouble("maxDistance", BeaconRadarPreferences.getMaxDistance(reactContext))
             try {
                 putBoolean("foregroundServiceFailed", beaconManager.foregroundServiceStartFailed())
@@ -348,6 +438,12 @@ class BeaconRadarModule(private val reactContext: ReactApplicationContext) :
 
     override fun invalidate() {
         BeaconBluetoothManager.cancelActiveConnect()
+        if (!BeaconRadarPreferences.isBackgroundModeEnabled(reactContext)) {
+            BeaconRadarBackgroundBootstrap.unregisterBackgroundReceivers(reactContext)
+        } else {
+            log("Preserving background receivers during invalidate — background mode is enabled")
+        }
+        instance = null
         super.invalidate()
     }
 }

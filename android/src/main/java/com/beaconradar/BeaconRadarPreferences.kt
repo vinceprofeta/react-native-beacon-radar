@@ -5,6 +5,7 @@ import android.content.Context
 object BeaconRadarPreferences {
     private const val PREFS_NAME = "BeaconRadarPrefs"
     private const val BACKGROUND_MODE_KEY = "backgroundModeEnabled"
+    private const val MOTION_DETECTION_ENABLED_KEY = "motionDetectionEnabled"
     private const val MAX_DISTANCE_KEY = "maxDistance"
     private const val POSTHOG_KEY = "posthogKey"
     private const val BEACON_DEBUG_KEY = "beaconDebug"
@@ -20,6 +21,18 @@ object BeaconRadarPreferences {
     fun setBackgroundModeEnabled(context: Context, enabled: Boolean) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(BACKGROUND_MODE_KEY, enabled).apply()
+    }
+
+    @JvmStatic
+    fun isMotionDetectionEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(MOTION_DETECTION_ENABLED_KEY, false)
+    }
+
+    @JvmStatic
+    fun setMotionDetectionEnabled(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(MOTION_DETECTION_ENABLED_KEY, enabled).apply()
     }
 
     @JvmStatic

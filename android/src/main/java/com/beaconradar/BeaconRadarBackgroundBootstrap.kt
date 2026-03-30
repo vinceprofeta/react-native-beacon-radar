@@ -4,8 +4,10 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -14,6 +16,13 @@ import org.altbeacon.beacon.BeaconManager
 import org.altbeacon.beacon.BeaconParser
 import org.altbeacon.beacon.Identifier
 import org.altbeacon.beacon.Region
+
+
+// Future Improvements (not in scope now)
+// Adaptive scan period on motion: When motion is detected (via ActivityTransition), increase BACKGROUND_BETWEEN_SCAN_PERIOD_MS to reduce battery drain while stationary and scan more aggressively when the user is moving. Currently set to 0ms (continuous), which is aggressive but effective.
+// AlarmManager/WorkManager watchdog: A periodic heartbeat (~15 min) that survives force-close and restarts monitoring automatically without requiring a reboot or user app launch.
+
+
 
 object BeaconRadarBackgroundBootstrap {
     private const val TAG = "BeaconRadarBootstrap"
@@ -25,6 +34,7 @@ object BeaconRadarBackgroundBootstrap {
     private const val FOREGROUND_NOTIFICATION_DESCRIPTION =
         "Throne is running in the background to detect your nearby device."
     private const val FOREGROUND_NOTIFICATION_ID = 456
+    private const val USER_PRESENT_REFRESH_DEBOUNCE_MS = 3 * 60 * 1000L
 
     const val FOREGROUND_SCAN_PERIOD_MS = 300L
     const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
@@ -38,6 +48,36 @@ object BeaconRadarBackgroundBootstrap {
     @Volatile
     var appContext: Context? = null
         private set
+
+    @Volatile
+    private var isUserPresentReceiverRegistered = false
+
+    @Volatile
+    private var lastUserPresentRefreshAtMs = 0L
+
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            val action = intent?.action ?: return
+            val appCtx = context.applicationContext
+            if (!BeaconRadarPreferences.isBackgroundModeEnabled(appCtx)) {
+                logInfo(appCtx, "Ignoring $action because background mode is disabled")
+                return
+            }
+
+            val now = System.currentTimeMillis()
+            synchronized(this@BeaconRadarBackgroundBootstrap) {
+                if (now - lastUserPresentRefreshAtMs < USER_PRESENT_REFRESH_DEBOUNCE_MS) {
+                    logInfo(appCtx, "Ignoring $action because user-present refresh is debounced")
+                    return
+                }
+                lastUserPresentRefreshAtMs = now
+            }
+
+            logInfo(appCtx, "Refreshing background monitoring after $action", "BEACON_MONITORING_SETUP")
+            ensureBackgroundMonitoring(appCtx, "user-present:$action")
+            retryForegroundServiceIfNeeded(appCtx)
+        }
+    }
 
     fun defaultRegion(): Region {
         return Region("all-beacons", Identifier.parse(DEFAULT_REGION_UUID), null, null)
@@ -55,9 +95,9 @@ object BeaconRadarBackgroundBootstrap {
         }
 
         try {
-            beaconManager.setRegionStatePeristenceEnabled(false)
+            beaconManager.setRegionStatePeristenceEnabled(true)
         } catch (e: Exception) {
-            logWarning(appCtx, "Could not disable region state persistence: ${e.message}")
+            logWarning(appCtx, "Could not enable region state persistence: ${e.message}")
         }
 
         beaconManager.foregroundScanPeriod = FOREGROUND_SCAN_PERIOD_MS
@@ -81,6 +121,8 @@ object BeaconRadarBackgroundBootstrap {
         }
 
         val beaconManager = configureBeaconManager(appCtx)
+        registerUserPresentReceiver(appCtx)
+        BeaconRadarMotionController.applyCurrentState(appCtx)
         registerNotifiers(beaconManager)
 
         try {
@@ -107,6 +149,24 @@ object BeaconRadarBackgroundBootstrap {
 
         isMonitoringInitialized = true
         logInfo(appCtx, "Background monitoring ensured from $source", "BEACON_MONITORING_SETUP")
+    }
+
+    @Synchronized
+    fun unregisterBackgroundReceivers(context: Context) {
+        val appCtx = context.applicationContext
+        if (isUserPresentReceiverRegistered) {
+            try {
+                appCtx.unregisterReceiver(userPresentReceiver)
+            } catch (e: IllegalArgumentException) {
+                logWarning(appCtx, "User-present receiver was not registered: ${e.message}")
+            } catch (e: Exception) {
+                logWarning(appCtx, "Failed to unregister user-present receiver: ${e.message}")
+            } finally {
+                isUserPresentReceiverRegistered = false
+            }
+        }
+
+        BeaconRadarMotionController.unregister(appCtx, "Background receiver cleanup")
     }
 
     fun tryEnableForegroundServiceScanning(context: Context, beaconManager: BeaconManager = configureBeaconManager(context)) {
@@ -173,6 +233,27 @@ object BeaconRadarBackgroundBootstrap {
         beaconManager.removeRangeNotifier(BeaconRadarBackgroundCallbacks)
         beaconManager.addMonitorNotifier(BeaconRadarBackgroundCallbacks)
         beaconManager.addRangeNotifier(BeaconRadarBackgroundCallbacks)
+    }
+
+    @Synchronized
+    private fun registerUserPresentReceiver(context: Context) {
+        if (isUserPresentReceiverRegistered) {
+            return
+        }
+
+        val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
+        try {
+            ContextCompat.registerReceiver(
+                context.applicationContext,
+                userPresentReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            isUserPresentReceiverRegistered = true
+            logInfo(context.applicationContext, "Registered unlock receiver for background refresh")
+        } catch (e: Exception) {
+            logWarning(context.applicationContext, "Failed to register unlock receiver: ${e.message}")
+        }
     }
 
     /**
