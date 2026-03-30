@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import org.altbeacon.beacon.BeaconManager
@@ -25,6 +27,7 @@ object BeaconRadarBackgroundBootstrap {
     private const val FOREGROUND_NOTIFICATION_DESCRIPTION =
         "Throne is running in the background to detect your nearby device."
     private const val FOREGROUND_NOTIFICATION_ID = 456
+    private const val FOREGROUND_SERVICE_RETRY_DELAY_MS = 5000L
 
     const val FOREGROUND_SCAN_PERIOD_MS = 300L
     const val FOREGROUND_BETWEEN_SCAN_PERIOD_MS = 0L
@@ -83,30 +86,37 @@ object BeaconRadarBackgroundBootstrap {
         val beaconManager = configureBeaconManager(appCtx)
         registerNotifiers(beaconManager)
 
-        try {
-            beaconManager.setBackgroundMode(true)
-        } catch (e: Exception) {
-            logWarning(appCtx, "Failed to enable background mode from $source: ${e.message}")
+        val mainHandler = Handler(Looper.getMainLooper())
+        mainHandler.post {
+            try {
+                beaconManager.setBackgroundMode(true)
+            } catch (e: Exception) {
+                logWarning(appCtx, "Failed to enable background mode from $source: ${e.message}")
+            }
+
+            tryEnableForegroundServiceScanning(appCtx, beaconManager)
+
+            val region = defaultRegion()
+
+            try {
+                beaconManager.startMonitoring(region)
+            } catch (e: Exception) {
+                logWarning(appCtx, "startMonitoring failed from $source: ${e.message}")
+            }
+
+            try {
+                beaconManager.startRangingBeacons(region)
+            } catch (e: Exception) {
+                logWarning(appCtx, "startRangingBeacons failed from $source: ${e.message}")
+            }
+
+            isMonitoringInitialized = true
+            logInfo(appCtx, "Background monitoring ensured from $source", "BEACON_MONITORING_SETUP")
+
+            mainHandler.postDelayed({
+                retryForegroundServiceIfNeeded(appCtx)
+            }, FOREGROUND_SERVICE_RETRY_DELAY_MS)
         }
-
-        tryEnableForegroundServiceScanning(appCtx, beaconManager)
-
-        val region = defaultRegion()
-
-        try {
-            beaconManager.startMonitoring(region)
-        } catch (e: Exception) {
-            logWarning(appCtx, "startMonitoring failed from $source: ${e.message}")
-        }
-
-        try {
-            beaconManager.startRangingBeacons(region)
-        } catch (e: Exception) {
-            logWarning(appCtx, "startRangingBeacons failed from $source: ${e.message}")
-        }
-
-        isMonitoringInitialized = true
-        logInfo(appCtx, "Background monitoring ensured from $source", "BEACON_MONITORING_SETUP")
     }
 
     fun tryEnableForegroundServiceScanning(context: Context, beaconManager: BeaconManager = configureBeaconManager(context)) {
