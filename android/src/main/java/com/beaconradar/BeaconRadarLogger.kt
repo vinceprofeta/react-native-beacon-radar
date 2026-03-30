@@ -6,6 +6,10 @@ import org.json.JSONObject
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.Executors
 
 object BeaconRadarLogger {
@@ -103,9 +107,13 @@ object BeaconRadarLogger {
 
         val distinctId = context.getSharedPreferences("BeaconRadarPrefs", Context.MODE_PRIVATE)
             .getString("throneUserId", "") ?: ""
+        val deviceTimestamp = iso8601Timestamp(System.currentTimeMillis())
+        val deviceTimestampUnix = System.currentTimeMillis() / 1000.0
 
         val eventProperties = linkedMapOf<String, Any?>(
             "distinct_id" to distinctId,
+            "device_timestamp" to deviceTimestamp,
+            "device_timestamp_unix" to deviceTimestampUnix,
             "message" to logMessage,
             "level" to level,
             "event_type" to type,
@@ -117,7 +125,7 @@ object BeaconRadarLogger {
         val eventName = POSTHOG_EVENT_PREFIX + type
 
         networkExecutor.execute {
-            posthog(posthogKey, eventName, eventProperties, tag)
+            posthog(posthogKey, eventName, eventProperties, deviceTimestamp, tag)
         }
     }
 
@@ -139,13 +147,20 @@ object BeaconRadarLogger {
         }
     }
 
-    private fun posthog(apiKey: String, eventName: String, properties: Map<String, Any?>, tag: String) {
+    private fun posthog(
+        apiKey: String,
+        eventName: String,
+        properties: Map<String, Any?>,
+        timestamp: String,
+        tag: String
+    ) {
         var connection: HttpURLConnection? = null
         try {
             val payload = JSONObject()
                 .put("api_key", apiKey)
                 .put("event", eventName)
                 .put("properties", properties.toJsonObject())
+                .put("timestamp", timestamp)
                 .toString()
 
             connection = (URL(POSTHOG_URL).openConnection() as HttpURLConnection).apply {
@@ -170,6 +185,12 @@ object BeaconRadarLogger {
         } finally {
             connection?.disconnect()
         }
+    }
+
+    private fun iso8601Timestamp(timeMs: Long): String {
+        val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        formatter.timeZone = TimeZone.getTimeZone("UTC")
+        return formatter.format(Date(timeMs))
     }
 
     private fun Map<String, Any?>.toJsonObject(): JSONObject {
